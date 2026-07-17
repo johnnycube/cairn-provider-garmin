@@ -1,0 +1,458 @@
+"""NATS runtime: connect, heartbeat, serve discover, pull fetch jobs, publish results.
+
+Job wire (server→worker) is hand-rolled JSON; results are protojson JobResult.
+Per-user Garmin credentials are fetched fresh per account via the
+cairn.creds.garmin.get request/reply (never queued in a job).
+"""
+from __future__ import annotations
+
+import asyncio
+import json
+import logging
+from datetime import datetime, timedelta, timezone
+
+import nats
+from nats.errors import TimeoutError as NatsTimeout
+
+import cairn_garmin  # noqa: F401 (proto path bootstrap)
+from cairn.worker.v1 import worker_service_pb2 as w
+from google.protobuf import json_format
+
+from . import archive
+from . import config as C
+from . import mapping
+from .garmin_client import GarminClient
+from .manifest import manifest
+
+log = logging.getLogger("cairn.garmin")
+
+DISCOVER_SUBJECT = f"cairn.discover.{C.PROVIDER}"
+CREDS_SUBJECT = "cairn.creds.garmin.get"
+PER_PAGE = 50
+
+
+class Worker:
+    def __init__(self, cfg: C.Config):
+        self.cfg = cfg
+        self.nc: nats.NATS | None = None
+        self.js = None
+        self._stop = asyncio.Event()
+        self._clients: dict[str, GarminClient] = {}  # account_id → client
+        self._reconciled_at: dict[str, float] = {}  # account_id → loop time of last real reconcile
+
+    @property
+    def worker_key(self) -> str:
+        return f"{C.WORKER_NAME}-{C.PROVIDER}"
+
+    async def connect(self) -> None:
+        opts: dict = {"name": self.worker_key, "max_reconnect_attempts": -1}
+        if self.cfg.nats_user:
+            opts["user"] = self.cfg.nats_user
+            opts["password"] = self.cfg.nats_password
+        # Production enrollment-token + nkey auth is a follow-up; dev uses
+        # anonymous or user/password (mirrors the Go worker).
+        self.nc = await nats.connect(self.cfg.nats_url, **opts)
+        self.js = self.nc.jetstream()
+        log.info("connected to %s", self.cfg.nats_url)
+
+    async def run(self) -> None:
+        await self.connect()
+        await self.nc.subscribe(DISCOVER_SUBJECT, cb=self._on_discover)
+        tasks = [
+            asyncio.create_task(self._heartbeat_loop()),
+            asyncio.create_task(self._consume(C.SUBJ_FETCH, "fetch", self._handle_fetch_source)),
+            asyncio.create_task(self._consume(C.SUBJ_METRICS, "metrics", self._handle_import_metrics)),
+            asyncio.create_task(self._consume(C.SUBJ_PARSE_BLOB, "parseblob", self._handle_parse_blob)),
+            asyncio.create_task(self._consume(C.SUBJ_RECONCILE, "reconcile", self._handle_reconcile)),
+        ]
+        log.info(
+            "serving %s; pulling %s, %s, %s, %s",
+            DISCOVER_SUBJECT, C.SUBJ_FETCH, C.SUBJ_METRICS, C.SUBJ_PARSE_BLOB, C.SUBJ_RECONCILE,
+        )
+        await self._stop.wait()
+        for t in tasks:
+            t.cancel()
+        if self.nc:
+            await self.nc.drain()
+
+    def stop(self) -> None:
+        self._stop.set()
+
+    # --- credentials + client cache ---
+    async def _client_for(self, account_id: str) -> GarminClient:
+        if account_id in self._clients:
+            return self._clients[account_id]
+        email, password = await self._fetch_creds(account_id)
+        garth_home = f"{self.cfg.garth_home}/{account_id or 'default'}"
+        client = GarminClient(email, password, garth_home)
+        self._clients[account_id] = client
+        return client
+
+    async def _fetch_creds(self, account_id: str) -> tuple[str, str]:
+        if account_id and self.nc is not None:
+            try:
+                resp = await self.nc.request(
+                    CREDS_SUBJECT, json.dumps({"account_id": account_id}).encode(), timeout=5
+                )
+                data = json.loads(resp.data)
+                if not data.get("error") and data.get("email"):
+                    return data["email"], data.get("password", "")
+                log.warning("creds rpc for %s: %s", account_id, data.get("error"))
+            except Exception as e:  # noqa: BLE001
+                log.warning("creds rpc failed for %s: %s", account_id, e)
+        if self.cfg.garmin_email and self.cfg.garmin_password:
+            return self.cfg.garmin_email, self.cfg.garmin_password
+        raise RuntimeError(f"no Garmin credentials for account {account_id}")
+
+    # --- heartbeat ---
+    async def _heartbeat_loop(self) -> None:
+        kv = await self.js.key_value(C.PRESENCE_KV)  # created by the server's stream bootstrap
+        key = f"{C.WORKER_NAME}.{self.cfg.instance_id}"
+        while not self._stop.is_set():
+            payload = {
+                "worker_name": C.WORKER_NAME,
+                "worker_key": self.worker_key,
+                "instance_id": self.cfg.instance_id,
+                "version": C.VERSION,
+                "provider": C.PROVIDER,
+                "package": C.PACKAGE,
+                "webhooks": False,
+                "capabilities": manifest(),
+                "last_seen": datetime.now(timezone.utc).isoformat(),
+            }
+            try:
+                await kv.put(key, json.dumps(payload).encode())
+            except Exception as e:  # noqa: BLE001
+                log.debug("heartbeat failed: %s", e)
+            try:
+                await asyncio.wait_for(self._stop.wait(), timeout=self.cfg.heartbeat_interval_s)
+            except asyncio.TimeoutError:
+                pass
+
+    # --- discover (request/reply): list activities for a page ---
+    async def _on_discover(self, msg) -> None:
+        try:
+            req = json.loads(msg.data)
+            account_id = req.get("account_id", "")
+            page = max(int(req.get("start_page", 1) or 1), 1)
+            client = await self._client_for(account_id)
+            offset = (page - 1) * PER_PAGE
+            acts = await asyncio.to_thread(client.list_activities, offset, PER_PAGE)
+            if not acts:
+                resp = {"items": [], "complete": True}
+            else:
+                items = [
+                    {
+                        "item_type": "activity",
+                        "external_id": str(a.get("activityId")),
+                        "item_time": _activity_time(a),
+                    }
+                    for a in acts
+                    if a.get("activityId") is not None
+                ]
+                resp = {"items": items, "next_page": page + 1}
+        except Exception as e:  # noqa: BLE001
+            log.error("discover error: %s", e)
+            resp = {"error": str(e)}
+        await msg.respond(json.dumps(resp).encode())
+
+    # --- fetch_source (pull): import one activity ---
+
+    # A job that keeps failing (activity gone upstream, unmappable payload)
+    # is terminated after this many deliveries instead of NAK-looping forever.
+    # The server's stale-queue reaper then fails the import-queue item.
+    MAX_DELIVERIES = 5
+    # How long a failed job waits before redelivery — keeps a failing
+    # activity from hot-looping against the Garmin API.
+    NAK_DELAY_S = 60
+    # Ack-deadline extension cadence; must stay below the consumer AckWait
+    # (default 30s). Covers slow handlers AND messages waiting in the batch.
+    ACK_EXTEND_S = 10
+
+    async def _extend_ack(self, m) -> None:
+        try:
+            while True:
+                await asyncio.sleep(self.ACK_EXTEND_S)
+                await m.in_progress()
+        except asyncio.CancelledError:
+            pass
+        except Exception:  # noqa: BLE001
+            pass  # message already acked/naked or delivery gone — heartbeat ends
+
+    async def _consume(self, subject: str, suffix: str, handler) -> None:
+        psub = await self.js.pull_subscribe(subject, durable=f"garmin-{suffix}", stream=C.JOB_STREAM)
+        while not self._stop.is_set():
+            try:
+                msgs = await psub.fetch(self.cfg.pull_batch, timeout=5)
+            except NatsTimeout:
+                continue
+            except Exception as e:  # noqa: BLE001
+                log.warning("fetch error on %s: %s", subject, e)
+                await asyncio.sleep(1)
+                continue
+            # Extend every fetched message's ack deadline from arrival: the
+            # batch is processed sequentially, and without this a slow handler
+            # pushes the waiting messages past AckWait into redelivery loops.
+            heartbeats = [asyncio.create_task(self._extend_ack(m)) for m in msgs]
+            for m, hb in zip(msgs, heartbeats):
+                try:
+                    await handler(m.data)
+                    await m.ack()
+                except Exception as e:  # noqa: BLE001
+                    deliveries = m.metadata.num_delivered or 1
+                    if deliveries >= self.MAX_DELIVERIES:
+                        log.error("handler error on %s (delivery %d, terminating): %s",
+                                  subject, deliveries, e)
+                        await self._publish_failure(subject, m.data, e)
+                        await m.term()
+                    else:
+                        log.error("handler error on %s (delivery %d/%d): %s",
+                                  subject, deliveries, self.MAX_DELIVERIES, e)
+                        await m.nak(delay=self.NAK_DELAY_S)
+                finally:
+                    hb.cancel()
+
+    async def _publish_result(self, subject: str, jr) -> None:
+        """Publish a JobResult. Event-carrying results are claim-checked:
+        the full protojson body goes to the blob store and only a small
+        envelope with payload_ref travels over NATS, so stream-heavy
+        activities can't exceed the broker's max_payload. Event-free
+        results (nothing to spill) publish inline.
+        """
+        body = json_format.MessageToJson(jr).encode()
+        if not jr.events:
+            await self.js.publish(subject, body)
+            return
+        ref = await archive.upload_result(self.nc, body)
+        env = w.JobResult(
+            worker_name=jr.worker_name,
+            worker_version=jr.worker_version,
+            worker_package=jr.worker_package,
+            more_available=jr.more_available,
+        )
+        if jr.HasField("new_watermark"):
+            env.new_watermark.CopyFrom(jr.new_watermark)
+        env.payload_ref.blob_id = ref["blob_id"]
+        env.payload_ref.size_bytes = ref["size"]
+        env.payload_ref.content_type = "application/json"
+        env.payload_ref.content_sha256 = ref["sha256"]
+        await self.js.publish(subject, json_format.MessageToJson(env).encode())
+
+    async def _publish_failure(self, job_subject: str, body: bytes, err: Exception) -> None:
+        """Best-effort failure envelope published alongside a Term, so the
+        server fails the import-queue item with the true reason instead of
+        the stale reaper's masked "no result after N dispatch attempts".
+        """
+        try:
+            job = json.loads(body)
+        except Exception:  # noqa: BLE001
+            return
+        ext_id = str(job.get("ext_id") or "")
+        if not ext_id:
+            return
+        jr = w.JobResult(worker_name=C.WORKER_NAME, worker_version=C.VERSION, worker_package=C.PACKAGE)
+        setattr(jr.error, "class", w.ERROR_CLASS_WORKER_BUG)
+        jr.error.code = type(err).__name__
+        jr.error.message = str(err)[:500]
+        jr.failed_ref.user_id = str(job.get("user_id") or "")
+        jr.failed_ref.provider = C.PROVIDER
+        jr.failed_ref.external_account_id = str(job.get("account_id") or "")
+        jr.failed_ref.external_id = ext_id
+        subject = job_subject.replace("cairn.jobs.", "cairn.results.", 1)
+        try:
+            await self.js.publish(subject, json_format.MessageToJson(jr).encode())
+        except Exception as e:  # noqa: BLE001
+            log.warning("failure result publish failed for %s: %s", ext_id, e)
+
+    async def _handle_fetch_source(self, body: bytes) -> None:
+        job = json.loads(body)
+        ext_id = job.get("ext_id")
+        if not ext_id:
+            raise ValueError("missing ext_id")
+        account_id = job.get("account_id", "")
+        user_id = job.get("user_id", "")
+        client = await self._client_for(account_id)
+        act = await asyncio.to_thread(client.get_activity, ext_id)
+
+        stream = None
+        details = None
+        if job.get("fetch_streams"):
+            details = await asyncio.to_thread(client.get_activity_details, ext_id)
+            stream = mapping.activity_stream(details, mapping.start_ms(act))
+
+        ref = w.ExternalRef(
+            user_id=user_id, provider=C.PROVIDER,
+            external_account_id=account_id, external_id=str(ext_id),
+        )
+        imported = w.ImportedActivity(ref=ref, payload=mapping.activity_payload(act))
+        if stream is not None:
+            imported.stream.CopyFrom(stream)
+
+        # Archive the raw response (best-effort) so it's viewable + re-parseable.
+        blob_id, blob_size = await archive.archive(self.nc, user_id, str(ext_id), act, details)
+        if blob_id:
+            imported.raw_blob_id = blob_id
+            imported.raw_content_type = "application/json"
+            imported.raw_size_bytes = blob_size
+
+        event = w.WorkerEvent(type=w.WORKER_EVENT_TYPE_ACTIVITY, activity=imported)
+        jr = mapping.job_result([event], name=C.WORKER_NAME, version=C.VERSION, package=C.PACKAGE)
+        await self._publish_result(C.RESULT_SUBJECT, jr)
+        log.info("published activity %s for user %s", ext_id, job.get("user_id"))
+
+    async def _handle_parse_blob(self, body: bytes) -> None:
+        """Re-parse an archived activity with current mapping logic — no Garmin
+        API call. Downloads the stored envelope, re-maps it, and republishes;
+        the server's ingest finds the existing source and replaces the payload.
+        """
+        job = json.loads(body)
+        blob = job.get("blob") or {}
+        ext_id = job.get("ext_id", "")
+        fallback = blob.get("fallback_handle", "")
+
+        env = await archive.fetch(self.nc, blob.get("url", ""), fallback)
+        act = env.get("activity") or {}
+        details = env.get("details")
+
+        ref = w.ExternalRef(
+            user_id=job.get("user_id", ""), provider=C.PROVIDER,
+            external_account_id=job.get("account_id", ""), external_id=str(ext_id),
+        )
+        imported = w.ImportedActivity(ref=ref, payload=mapping.activity_payload(act))
+        if details:
+            stream = mapping.activity_stream(details, mapping.start_ms(act))
+            if stream is not None:
+                imported.stream.CopyFrom(stream)
+        if fallback:
+            imported.raw_blob_id = fallback  # keep the archive reference stable
+
+        event = w.WorkerEvent(type=w.WORKER_EVENT_TYPE_ACTIVITY, activity=imported)
+        jr = mapping.job_result([event], name=C.WORKER_NAME, version=C.VERSION, package=C.PACKAGE)
+        await self._publish_result(C.RESULT_SUBJECT, jr)
+        log.info("re-parsed activity %s for user %s", ext_id, job.get("user_id"))
+
+    # --- reconcile (pull): catch new activity since the watermark ---
+
+    # Reconcile never lists further back than this, even without a watermark —
+    # full-history backfill is the user-driven import queue's job.
+    RECONCILE_LOOKBACK_DAYS = 30
+    # Cap on fetch_source sub-jobs one reconcile run enqueues.
+    RECONCILE_MAX_ENQUEUE = 500
+    # Coalescing window: reconcile jobs for an account handled more recently
+    # than this are acked without touching the Garmin API. Drains a scheduler
+    # backlog (jobs queued while no reconcile consumer existed) as no-ops.
+    RECONCILE_COALESCE_S = 600
+
+    async def _handle_reconcile(self, body: bytes) -> None:
+        job = json.loads(body)
+        account_id = job.get("account_id", "")
+        user_id = job.get("user_id", "")
+        job_id = job.get("job_id", "")
+
+        now = asyncio.get_running_loop().time()
+        last = self._reconciled_at.get(account_id)
+        if last is not None and now - last < self.RECONCILE_COALESCE_S:
+            return  # coalesced — ack without API calls
+        self._reconciled_at[account_id] = now
+
+        watermark = None
+        if raw := job.get("watermark"):
+            try:
+                watermark = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+            except ValueError:
+                log.warning("reconcile: unparseable watermark %r", raw)
+
+        # Window start: the later of (watermark - 1h drift margin) and the
+        # lookback floor — always bounded to recent activity, never a flood.
+        window_start = datetime.now(timezone.utc) - timedelta(days=self.RECONCILE_LOOKBACK_DAYS)
+        if watermark is not None and watermark - timedelta(hours=1) > window_start:
+            window_start = watermark - timedelta(hours=1)
+
+        max_enqueue = int(job.get("max_enqueue") or 0) or self.RECONCILE_MAX_ENQUEUE
+        known = set(job.get("known_ext_ids") or [])
+
+        client = await self._client_for(account_id)
+        enqueued = 0
+        high_water = watermark
+        offset, page_size = 0, PER_PAGE
+        while enqueued < max_enqueue:
+            acts = await asyncio.to_thread(client.list_activities, offset, page_size)
+            if not acts:
+                break
+            page_fully_in_window = True
+            for a in acts:
+                ext_id = a.get("activityId")
+                if ext_id is None:
+                    continue
+                ext_id = str(ext_id)
+                ms = mapping.start_ms(a)
+                start = datetime.fromtimestamp(ms / 1000, tz=timezone.utc) if ms else None
+                if start is not None and start < window_start:
+                    page_fully_in_window = False
+                    continue  # newest-first listing: rest of page is older
+                if ext_id in known:
+                    continue
+                fetch_body = json.dumps({
+                    "job_id": f"{job_id}:{ext_id}",
+                    "account_id": account_id,
+                    "user_id": user_id,
+                    "provider": C.PROVIDER,
+                    "ext_id": ext_id,
+                    "fetch_streams": True,
+                    "reason": "reconcile",
+                }).encode()
+                # Deterministic msg-id: duplicate enqueues within JetStream's
+                # dedup window collapse; ingest dedups idempotently beyond it.
+                msg_id = f"reconcile:{C.PROVIDER}:{account_id}:{ext_id}"
+                await self.js.publish(C.SUBJ_FETCH, fetch_body, headers={"Nats-Msg-Id": msg_id})
+                enqueued += 1
+                if start is not None and (high_water is None or start > high_water):
+                    high_water = start
+                if enqueued >= max_enqueue:
+                    break
+            if not page_fully_in_window or len(acts) < page_size:
+                break
+            offset += page_size
+
+        # The result MUST be published even when nothing new was found —
+        # advancing last_sync_at is what stops the scheduler from re-polling
+        # the account every tick. Account-suffixed subject for attribution.
+        jr = w.JobResult(worker_name=C.WORKER_NAME, worker_version=C.VERSION, worker_package=C.PACKAGE)
+        if high_water is not None:
+            jr.new_watermark.FromDatetime(high_water)
+        await self.js.publish(
+            f"{C.RESULT_RECONCILE_PREFIX}.{account_id}",
+            json_format.MessageToJson(jr).encode(),
+            headers={"Nats-Msg-Id": f"result:{job_id}"},
+        )
+        log.info("reconcile for %s: %d new activity job(s) enqueued", account_id, enqueued)
+
+    async def _handle_import_metrics(self, body: bytes) -> None:
+        job = json.loads(body)
+        account_id = job.get("account_id", "")
+        user_id = job.get("user_id", "")
+        client = await self._client_for(account_id)
+        since = datetime.fromtimestamp(int(job.get("since_unix", 0)), tz=timezone.utc).date()
+        until = datetime.fromtimestamp(int(job.get("until_unix", 0)), tz=timezone.utc).date()
+
+        events: list = []
+        day = since
+        while day <= until and (day - since).days <= 365:
+            day_ms = int(datetime(day.year, day.month, day.day, tzinfo=timezone.utc).timestamp() * 1000)
+            health = await asyncio.to_thread(client.daily_health, day.isoformat())
+            for key, value in health.items():
+                events.append(mapping.metric_event(user_id, account_id, key, day_ms, float(value)))
+            day += timedelta(days=1)
+
+        if not events:
+            return
+        jr = mapping.job_result(events, name=C.WORKER_NAME, version=C.VERSION, package=C.PACKAGE)
+        await self._publish_result(C.RESULT_METRICS, jr)
+        log.info("published %d health metrics for user %s", len(events), user_id)
+
+
+def _activity_time(act: dict) -> str:
+    ms = mapping.start_ms(act)
+    if ms:
+        return datetime.fromtimestamp(ms / 1000, tz=timezone.utc).isoformat()
+    return ""

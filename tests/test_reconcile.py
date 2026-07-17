@@ -1,0 +1,111 @@
+"""Reconcile handler: lists recent activities, enqueues fetch_source for
+unknown ones, always publishes an account-suffixed result with the new
+watermark, and coalesces backlog jobs without API calls."""
+import asyncio
+import json
+from datetime import datetime, timedelta, timezone
+
+from google.protobuf import json_format
+
+import cairn_garmin  # noqa: F401 (proto path bootstrap)
+from cairn.worker.v1 import worker_service_pb2 as w
+from cairn_garmin import config as C
+from cairn_garmin import runtime
+
+
+class FakeJS:
+    def __init__(self):
+        self.published = []
+
+    async def publish(self, subject, data, headers=None):
+        self.published.append((subject, data, headers or {}))
+
+
+class FakeClient:
+    def __init__(self, activities):
+        self.activities = activities
+        self.list_calls = 0
+
+    def list_activities(self, start, limit):
+        self.list_calls += 1
+        return self.activities[start:start + limit]
+
+
+def _worker(client):
+    wk = runtime.Worker.__new__(runtime.Worker)
+    wk.js = FakeJS()
+    wk.nc = object()
+    wk._clients = {"acc-1": client}
+    wk._reconciled_at = {}
+    return wk
+
+
+def _act(ext_id, start):
+    return {"activityId": ext_id, "beginTimestamp": int(start.timestamp() * 1000)}
+
+
+def _job(**over):
+    base = {"job_id": "j1", "account_id": "acc-1", "user_id": "u-1", "provider": "garmin"}
+    base.update(over)
+    return json.dumps(base).encode()
+
+
+def test_reconcile_enqueues_unknown_and_publishes_watermark():
+    now = datetime.now(timezone.utc)
+    wm = now - timedelta(days=2)
+    client = FakeClient([
+        _act(101, now - timedelta(hours=1)),   # new → enqueue
+        _act(100, now - timedelta(days=1)),    # new → enqueue
+        _act(99, now - timedelta(days=10)),    # older than watermark window → stop
+    ])
+    wk = _worker(client)
+
+    asyncio.run(wk._handle_reconcile(_job(watermark=wm.isoformat())))
+
+    fetches = [(s, d, h) for s, d, h in wk.js.published if s == C.SUBJ_FETCH]
+    assert [json.loads(d)["ext_id"] for _, d, _ in fetches] == ["101", "100"]
+    assert fetches[0][2]["Nats-Msg-Id"] == "reconcile:garmin:acc-1:101"
+    assert json.loads(fetches[0][1])["reason"] == "reconcile"
+
+    results = [(s, d) for s, d, _ in wk.js.published if s.startswith(C.RESULT_RECONCILE_PREFIX)]
+    assert len(results) == 1
+    subject, data = results[0]
+    assert subject == f"{C.RESULT_RECONCILE_PREFIX}.acc-1"
+    jr = json_format.Parse(data, w.JobResult())
+    got = jr.new_watermark.ToDatetime(tzinfo=timezone.utc)
+    assert abs((got - (now - timedelta(hours=1))).total_seconds()) < 1
+
+
+def test_reconcile_empty_still_publishes_result():
+    # Advancing last_sync_at on "nothing new" is what stops the scheduler
+    # from re-polling the account every tick.
+    wk = _worker(FakeClient([]))
+    asyncio.run(wk._handle_reconcile(_job()))
+
+    results = [s for s, _, _ in wk.js.published if s.startswith(C.RESULT_RECONCILE_PREFIX)]
+    assert results == [f"{C.RESULT_RECONCILE_PREFIX}.acc-1"]
+
+
+def test_reconcile_skips_known_ext_ids():
+    now = datetime.now(timezone.utc)
+    wk = _worker(FakeClient([_act(101, now - timedelta(hours=1))]))
+    asyncio.run(wk._handle_reconcile(_job(known_ext_ids=["101"])))
+
+    fetches = [s for s, _, _ in wk.js.published if s == C.SUBJ_FETCH]
+    assert fetches == []
+
+
+def test_reconcile_coalesces_backlog():
+    now = datetime.now(timezone.utc)
+    client = FakeClient([_act(101, now - timedelta(hours=1))])
+    wk = _worker(client)
+
+    asyncio.run(wk._handle_reconcile(_job()))
+    first_publishes = len(wk.js.published)
+    assert client.list_calls == 1
+
+    # Backlog drain: same account again within the coalescing window —
+    # no API call, no publish, just an ack.
+    asyncio.run(wk._handle_reconcile(_job(job_id="j2")))
+    assert client.list_calls == 1
+    assert len(wk.js.published) == first_publishes

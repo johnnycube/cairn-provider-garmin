@@ -1,0 +1,133 @@
+"""Thin wrapper over garminconnect with token-store resume.
+
+Garmin has no public activity OAuth API; garminconnect uses Garth SSO
+(email/password → cached OAuth1/2 tokens). Tokens are persisted under garth_home
+so we don't re-login per job. MFA accounts need a one-time interactive login to
+seed the token store.
+"""
+from __future__ import annotations
+
+from garminconnect import Garmin
+
+
+class GarminClient:
+    def __init__(self, email: str, password: str, garth_home: str):
+        self._email = email
+        self._password = password
+        self._garth_home = garth_home
+        self._api: Garmin | None = None
+
+    def _client(self) -> Garmin:
+        if self._api is not None:
+            return self._api
+        api = Garmin(self._email, self._password)
+        try:
+            api.login(self._garth_home)  # resume cached tokens if present
+        except Exception:
+            api.login()  # fresh SSO; persists to garth_home on success
+            try:
+                api.garth.dump(self._garth_home)
+            except Exception:
+                pass
+        self._api = api
+        return api
+
+    def list_activities(self, start: int = 0, limit: int = 50) -> list[dict]:
+        return self._client().get_activities(start, limit) or []
+
+    def get_activity(self, activity_id: str) -> dict:
+        return self._client().get_activity(activity_id)
+
+    def get_activity_details(self, activity_id: str) -> dict:
+        # maxchart/maxpoly default to full resolution.
+        return self._client().get_activity_details(activity_id)
+
+    # --- health metrics (daily) ---
+    def hrv(self, day: str) -> dict | None:
+        return _safe(lambda: self._client().get_hrv_data(day))
+
+    def sleep(self, day: str) -> dict | None:
+        return _safe(lambda: self._client().get_sleep_data(day))
+
+    def resting_hr(self, day: str) -> dict | None:
+        return _safe(lambda: self._client().get_rhr_day(day))
+
+    def steps(self, day: str) -> dict | None:
+        return _safe(lambda: self._client().get_steps_data(day))
+
+    def weight(self, start: str, end: str) -> dict | None:
+        return _safe(lambda: self._client().get_body_composition(start, end))
+
+    def daily_health(self, day: str) -> dict[str, float]:
+        """Return {canonical DataType: scalar} for one YYYY-MM-DD."""
+        return extract_daily_health(
+            hrv=self.hrv(day),
+            sleep=self.sleep(day),
+            rhr=self.resting_hr(day),
+            steps=self.steps(day),
+            wt=self.weight(day, day),
+        )
+
+
+def extract_daily_health(*, hrv, sleep, rhr, steps, wt) -> dict[str, float]:
+    """Pure extraction of {canonical DataType: scalar} from raw Garmin responses.
+
+    Defensive — Garmin response shapes vary by version; missing metrics are
+    simply omitted.
+    """
+    out: dict[str, float] = {}
+    if hrv and (v := _dig(hrv, ["hrvSummary", "lastNightAvg"])) is not None:
+        out["HRV"] = float(v)
+    if sleep and (v := _dig(sleep, ["dailySleepDTO", "sleepTimeSeconds"])) is not None:
+        out["Sleep"] = float(v)
+    if rhr:
+        v = _dig(rhr, ["restingHeartRate"])
+        if v is None:
+            rows = _dig(rhr, ["allMetrics", "metricsMap", "WELLNESS_RESTING_HEART_RATE"])
+            if isinstance(rows, list) and rows and isinstance(rows[0], dict):
+                v = rows[0].get("value")
+        if isinstance(v, (int, float)):
+            out["RestingHR"] = float(v)
+    total = _sum_steps(steps)
+    if total is not None:
+        out["Steps"] = float(total)
+    if wt and (v := _latest_weight_kg(wt)) is not None:
+        out["Weight"] = v
+    return out
+
+
+def _dig(d, path):
+    cur = d
+    for k in path:
+        if not isinstance(cur, dict):
+            return None
+        cur = cur.get(k)
+    return cur
+
+
+def _sum_steps(steps) -> int | None:
+    if isinstance(steps, list):
+        total = sum(int(s.get("steps", 0)) for s in steps if isinstance(s, dict))
+        return total or None
+    if isinstance(steps, dict):
+        v = steps.get("totalSteps") or steps.get("steps")
+        return int(v) if isinstance(v, (int, float)) else None
+    return None
+
+
+def _latest_weight_kg(wt: dict) -> float | None:
+    rows = wt.get("dateWeightList") or wt.get("dailyWeightSummaries") or []
+    grams = None
+    if rows and isinstance(rows, list):
+        last = rows[-1]
+        grams = last.get("weight") if isinstance(last, dict) else None
+    if grams is None:
+        grams = _dig(wt, ["totalAverage", "weight"])
+    return round(float(grams) / 1000.0, 2) if isinstance(grams, (int, float)) else None
+
+
+def _safe(fn):
+    try:
+        return fn()
+    except Exception:
+        return None
