@@ -4,6 +4,19 @@ All notable changes to the Cairn Garmin worker are documented here. The format
 follows [Keep a Changelog](https://keepachangelog.com/), and the project aims
 to follow [Semantic Versioning](https://semver.org/). Dates are ISO-8601.
 
+## [0.2.1] — 2026-09-11
+
+### Changed
+- Release images are signed keyless with cosign (Fulcio certificate bound to
+  this repository's release workflow) and ship SLSA provenance and SBOM
+  attestations; verify with `cosign verify` as documented in the workflow
+  header. No functional change to the worker.
+- GitHub Actions moved to the current majors of checkout, setup-python, and
+  the docker build actions.
+
+### Removed
+- The Gitea mirror workflow — the repository is published from GitHub only.
+
 ## [0.2.0] — 2026-07-16
 
 **First public release.** A standalone Python worker that imports Garmin
