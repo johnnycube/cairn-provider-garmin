@@ -4,6 +4,13 @@ All notable changes to the Cairn Garmin worker are documented here. The format
 follows [Keep a Changelog](https://keepachangelog.com/), and the project aims
 to follow [Semantic Versioning](https://semver.org/). Dates are ISO-8601.
 
+## [Unreleased]
+
+### Changed
+- Health-metric calls now propagate authentication failures (401/403) instead
+  of reporting an empty day; other per-metric errors are logged at debug.
+- A failed token-store write after a fresh login is logged instead of ignored.
+
 ## [0.2.1] — 2026-09-11
 
 ### Changed

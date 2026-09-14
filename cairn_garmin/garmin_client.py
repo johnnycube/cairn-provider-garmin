@@ -7,7 +7,14 @@ seed the token store.
 """
 from __future__ import annotations
 
-from garminconnect import Garmin
+import logging
+from typing import Any, Callable, TypeVar
+
+from garminconnect import Garmin, GarminConnectAuthenticationError
+
+log = logging.getLogger("cairn.garmin")
+
+T = TypeVar("T")
 
 
 class GarminClient:
@@ -24,11 +31,14 @@ class GarminClient:
         try:
             api.login(self._garth_home)  # resume cached tokens if present
         except Exception:
-            api.login()  # fresh SSO; persists to garth_home on success
+            api.login()  # fresh SSO
+            # garminconnect renamed the garth client attribute in 0.3 (garth → client).
+            store = getattr(api, "client", None) or api.garth
             try:
-                api.garth.dump(self._garth_home)
-            except Exception:
-                pass
+                store.dump(self._garth_home)
+            except Exception as e:  # noqa: BLE001
+                log.warning("could not persist Garmin tokens to %s (next job logs in again): %s",
+                            self._garth_home, e)
         self._api = api
         return api
 
@@ -96,7 +106,7 @@ def extract_daily_health(*, hrv, sleep, rhr, steps, wt) -> dict[str, float]:
     return out
 
 
-def _dig(d, path):
+def _dig(d: Any, path: list[str]) -> Any:
     cur = d
     for k in path:
         if not isinstance(cur, dict):
@@ -126,8 +136,26 @@ def _latest_weight_kg(wt: dict) -> float | None:
     return round(float(grams) / 1000.0, 2) if isinstance(grams, (int, float)) else None
 
 
-def _safe(fn):
+def _http_status(e: Exception) -> int | None:
+    # garth wraps the requests error in .error; garminconnect >= 0.3 and
+    # requests expose .response directly. Explicit None checks: a non-2xx
+    # requests.Response is falsy.
+    resp = getattr(getattr(e, "error", None), "response", None)
+    if resp is None:
+        resp = getattr(e, "response", None)
+    return getattr(resp, "status_code", None)
+
+
+def _safe(fn: Callable[[], T]) -> T | None:
+    """Treat a failed metric call as "no data" — except auth failures, which
+    must surface so the job fails instead of importing an empty day."""
     try:
         return fn()
-    except Exception:
+    except GarminConnectAuthenticationError:
+        raise
+    except Exception as e:  # noqa: BLE001
+        status = _http_status(e)
+        if status in (401, 403):
+            raise
+        log.debug("garmin metric call failed (status %s): %s", status, e)
         return None
