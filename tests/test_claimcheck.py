@@ -10,25 +10,11 @@ from google.protobuf import json_format
 import cairn_garmin  # noqa: F401 (proto path bootstrap)
 from cairn.worker.v1 import worker_service_pb2 as w
 from cairn_garmin import runtime
-
-
-class FakeJS:
-    def __init__(self):
-        self.published = []
-
-    async def publish(self, subject, data):
-        self.published.append((subject, data))
-
-
-def _worker():
-    wk = runtime.Worker.__new__(runtime.Worker)
-    wk.js = FakeJS()
-    wk.nc = object()
-    return wk
+from conftest import make_worker
 
 
 def test_publish_result_claim_checks_events(monkeypatch):
-    wk = _worker()
+    wk = make_worker()
     uploaded = {}
 
     async def fake_upload(nc, body):
@@ -44,7 +30,7 @@ def test_publish_result_claim_checks_events(monkeypatch):
     )
     asyncio.run(wk._publish_result("cairn.results.fetch_source.garmin", jr))
 
-    ((subject, data),) = wk.js.published
+    ((subject, data, _),) = wk.js.published
     assert subject == "cairn.results.fetch_source.garmin"
     env = json_format.Parse(data, w.JobResult())
     assert env.payload_ref.blob_id == "transfer/garmin/x.json"
@@ -56,21 +42,21 @@ def test_publish_result_claim_checks_events(monkeypatch):
 
 
 def test_publish_result_inline_when_no_events():
-    wk = _worker()
+    wk = make_worker()
     jr = w.JobResult(worker_name="garmin-fetcher")
     asyncio.run(wk._publish_result("cairn.results.fetch_source.garmin", jr))
 
-    ((_, data),) = wk.js.published
+    ((_, data, _),) = wk.js.published
     env = json_format.Parse(data, w.JobResult())
     assert not env.HasField("payload_ref")
 
 
 def test_publish_failure_envelope():
-    wk = _worker()
+    wk = make_worker()
     body = json.dumps({"ext_id": "99", "account_id": "a1", "user_id": "u1"}).encode()
     asyncio.run(wk._publish_failure("cairn.jobs.fetch_source.garmin", body, RuntimeError("boom")))
 
-    ((subject, data),) = wk.js.published
+    ((subject, data, _),) = wk.js.published
     assert subject == "cairn.results.fetch_source.garmin"
     env = json_format.Parse(data, w.JobResult())
     assert env.failed_ref.external_id == "99"

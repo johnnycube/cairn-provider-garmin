@@ -7,10 +7,8 @@ from __future__ import annotations
 
 
 def manifest() -> dict[str, dict]:
-    read_bf = {"read": True, "backfill": True}
     return {
         "Activity": {"read": True, "backfill": True, "granularity": "per-activity"},
-        "Lap": read_bf,
         "HRV": {"read": True, "backfill": True, "granularity": "daily"},
         "Sleep": {"read": True, "backfill": True, "granularity": "daily"},
         "Weight": {"read": True, "backfill": True, "granularity": "daily"},

@@ -13,6 +13,7 @@ from datetime import datetime, timedelta, timezone
 
 import nats
 from nats.errors import TimeoutError as NatsTimeout
+from nats.js import JetStreamContext
 
 import cairn_garmin  # noqa: F401 (proto path bootstrap)
 from cairn.worker.v1 import worker_service_pb2 as w
@@ -35,7 +36,7 @@ class Worker:
     def __init__(self, cfg: C.Config):
         self.cfg = cfg
         self.nc: nats.NATS | None = None
-        self.js = None
+        self.js: JetStreamContext | None = None
         self._stop = asyncio.Event()
         self._clients: dict[str, GarminClient] = {}  # account_id → client
         self._reconciled_at: dict[str, float] = {}  # account_id → loop time of last real reconcile
@@ -49,8 +50,7 @@ class Worker:
         if self.cfg.nats_user:
             opts["user"] = self.cfg.nats_user
             opts["password"] = self.cfg.nats_password
-        # Production enrollment-token + nkey auth is a follow-up; dev uses
-        # anonymous or user/password (mirrors the Go worker).
+        # Auth is anonymous or user/password only (mirrors the Go worker).
         self.nc = await nats.connect(self.cfg.nats_url, **opts)
         self.js = self.nc.jetstream()
         log.info("connected to %s", self.cfg.nats_url)

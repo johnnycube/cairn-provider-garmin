@@ -10,15 +10,7 @@ from google.protobuf import json_format
 import cairn_garmin  # noqa: F401 (proto path bootstrap)
 from cairn.worker.v1 import worker_service_pb2 as w
 from cairn_garmin import config as C
-from cairn_garmin import runtime
-
-
-class FakeJS:
-    def __init__(self):
-        self.published = []
-
-    async def publish(self, subject, data, headers=None):
-        self.published.append((subject, data, headers or {}))
+from conftest import make_worker
 
 
 class FakeClient:
@@ -29,15 +21,6 @@ class FakeClient:
     def list_activities(self, start, limit):
         self.list_calls += 1
         return self.activities[start:start + limit]
-
-
-def _worker(client):
-    wk = runtime.Worker.__new__(runtime.Worker)
-    wk.js = FakeJS()
-    wk.nc = object()
-    wk._clients = {"acc-1": client}
-    wk._reconciled_at = {}
-    return wk
 
 
 def _act(ext_id, start):
@@ -58,7 +41,7 @@ def test_reconcile_enqueues_unknown_and_publishes_watermark():
         _act(100, now - timedelta(days=1)),    # new → enqueue
         _act(99, now - timedelta(days=10)),    # older than watermark window → stop
     ])
-    wk = _worker(client)
+    wk = make_worker(client)
 
     asyncio.run(wk._handle_reconcile(_job(watermark=wm.isoformat())))
 
@@ -79,7 +62,7 @@ def test_reconcile_enqueues_unknown_and_publishes_watermark():
 def test_reconcile_empty_still_publishes_result():
     # Advancing last_sync_at on "nothing new" is what stops the scheduler
     # from re-polling the account every tick.
-    wk = _worker(FakeClient([]))
+    wk = make_worker(FakeClient([]))
     asyncio.run(wk._handle_reconcile(_job()))
 
     results = [s for s, _, _ in wk.js.published if s.startswith(C.RESULT_RECONCILE_PREFIX)]
@@ -88,7 +71,7 @@ def test_reconcile_empty_still_publishes_result():
 
 def test_reconcile_skips_known_ext_ids():
     now = datetime.now(timezone.utc)
-    wk = _worker(FakeClient([_act(101, now - timedelta(hours=1))]))
+    wk = make_worker(FakeClient([_act(101, now - timedelta(hours=1))]))
     asyncio.run(wk._handle_reconcile(_job(known_ext_ids=["101"])))
 
     fetches = [s for s, _, _ in wk.js.published if s == C.SUBJ_FETCH]
@@ -98,7 +81,7 @@ def test_reconcile_skips_known_ext_ids():
 def test_reconcile_coalesces_backlog():
     now = datetime.now(timezone.utc)
     client = FakeClient([_act(101, now - timedelta(hours=1))])
-    wk = _worker(client)
+    wk = make_worker(client)
 
     asyncio.run(wk._handle_reconcile(_job()))
     first_publishes = len(wk.js.published)

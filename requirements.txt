@@ -1,5 +1,4 @@
 nats-py>=2.7.0
 garminconnect>=0.2.19
 protobuf>=5.27
-nkeys>=0.2.0
 requests>=2.31

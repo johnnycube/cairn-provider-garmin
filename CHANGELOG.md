@@ -7,9 +7,17 @@ to follow [Semantic Versioning](https://semver.org/). Dates are ISO-8601.
 ## [Unreleased]
 
 ### Changed
+- README rewritten to match the code: full handler list (discover,
+  fetch_source, reconcile, import_metrics, parse_blob), a configuration table
+  with the real defaults, and the one-off Garth login recipe for MFA accounts.
 - Health-metric calls now propagate authentication failures (401/403) instead
   of reporting an empty day; other per-metric errors are logged at debug.
 - A failed token-store write after a fresh login is logged instead of ignored.
+
+### Removed
+- The `Lap` capability from the manifest — the worker never emitted lap events.
+- The unused `CAIRN_WORKER_ENROLLMENT_TOKEN` setting and the `nkeys`
+  dependency; NATS auth is anonymous or user/password.
 
 ## [0.2.1] — 2026-09-11
 

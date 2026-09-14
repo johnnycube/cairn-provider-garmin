@@ -31,7 +31,7 @@ _SPORT = {
 
 
 def _ts(epoch_ms: int | None) -> timestamp_pb2.Timestamp | None:
-    if not epoch_ms:
+    if epoch_ms is None:
         return None
     t = timestamp_pb2.Timestamp()
     t.FromDatetime(datetime.fromtimestamp(epoch_ms / 1000, tz=timezone.utc))

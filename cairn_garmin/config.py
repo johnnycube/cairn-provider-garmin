@@ -41,7 +41,6 @@ class Config:
     # Unset → a random uuid is generated; in k8s set it to the pod name so a
     # restart reuses the same presence key instead of leaving a ghost.
     instance_id: str = field(default_factory=lambda: os.getenv("CAIRN_WORKER_INSTANCE_ID", "") or uuid.uuid4().hex[:12])
-    enrollment_token: str = field(default_factory=lambda: os.getenv("CAIRN_WORKER_ENROLLMENT_TOKEN", ""))
     nats_user: str = field(default_factory=lambda: os.getenv("CAIRN_NATS_USER", ""))
     nats_password: str = field(default_factory=lambda: os.getenv("CAIRN_NATS_PASSWORD", ""))
     heartbeat_interval_s: int = field(default_factory=lambda: int(os.getenv("CAIRN_HEARTBEAT_INTERVAL_S", "20")))
