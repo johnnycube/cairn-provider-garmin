@@ -4,15 +4,20 @@ All notable changes to the Cairn Garmin worker are documented here. The format
 follows [Keep a Changelog](https://keepachangelog.com/), and the project aims
 to follow [Semantic Versioning](https://semver.org/). Dates are ISO-8601.
 
-## [Unreleased]
+## [0.2.2] — 2026-09-14
+
+### Fixed
+- Token persistence after a fresh login. garminconnect 0.3 renamed the
+  `garth` client attribute to `client`, so the token dump raised and was
+  silently swallowed; every job logged in to Garmin again. The worker now
+  resolves either attribute and logs a warning if the write fails.
+- Health-metric calls propagate authentication failures (401/403) instead of
+  reporting an empty day; other per-metric errors are logged at debug.
 
 ### Changed
 - README rewritten to match the code: full handler list (discover,
   fetch_source, reconcile, import_metrics, parse_blob), a configuration table
   with the real defaults, and the one-off Garth login recipe for MFA accounts.
-- Health-metric calls now propagate authentication failures (401/403) instead
-  of reporting an empty day; other per-metric errors are logged at debug.
-- A failed token-store write after a fresh login is logged instead of ignored.
 
 ### Removed
 - The `Lap` capability from the manifest — the worker never emitted lap events.
