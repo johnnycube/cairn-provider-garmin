@@ -6,6 +6,15 @@ to follow [Semantic Versioning](https://semver.org/). Dates are ISO-8601.
 
 ## [Unreleased]
 
+### Added
+- An integration test runs the worker's NATS operations (durable consumers,
+  presence KV, discover, credentials, claim-checked results, reconcile
+  sub-jobs, acks) against a real nats-server that grants only cairn-core's
+  worker permission template, so a subject missing from the template fails
+  the build. `make tools` installs the pinned nats-server (`go install`,
+  verified against the Go checksum database). Running under NATS auth needs
+  cairn-core with the aligned template (cairn-core PR #134).
+
 ## [0.2.3] — 2026-10-15
 
 ### Fixed
