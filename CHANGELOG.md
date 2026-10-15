@@ -6,10 +6,17 @@ to follow [Semantic Versioning](https://semver.org/). Dates are ISO-8601.
 
 ## [Unreleased]
 
+## [0.2.3] — 2026-10-15
+
+### Fixed
+- A stream descriptor without `metricsIndex` no longer crashes the activity
+  stream; the descriptor is skipped.
+
 ### Changed
 - The image runs as the unprivileged user `cairn` (uid/gid 10001) instead of
-  root. Existing `/data` volumes written by the old image must be made
-  writable for that uid, otherwise cached Garmin tokens cannot be read.
+  root. Only deployments that mount an existing `/data` volume written by the
+  old image need to make it writable for that uid; otherwise cached Garmin
+  tokens cannot be read.
 - Dependencies are locked with uv (`pyproject.toml` + `uv.lock`); the image
   installs exactly the locked set. `requirements*.txt` are gone.
 - Base images are pinned by digest; release images get commit-derived
@@ -18,6 +25,9 @@ to follow [Semantic Versioning](https://semver.org/). Dates are ISO-8601.
   `/tmp/cairn-garth`.
 - The MFA seeding recipe uses garminconnect, since garminconnect 0.3 no longer
   depends on garth.
+- `make check` gates CI and releases: ruff, mypy strict, tests with a coverage
+  floor, pip-audit, licenses, gitleaks and the image build. CodeQL runs on
+  pull requests.
 
 ## [0.2.2] — 2026-09-14
 
