@@ -6,6 +6,8 @@ venv/
 *.egg-info/
 .mypy_cache/
 .ruff_cache/
+.coverage
+
 
 # --- Secrets & local config ---
 .env

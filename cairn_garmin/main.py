@@ -1,4 +1,5 @@
 """Entrypoint for the Cairn Garmin worker."""
+
 from __future__ import annotations
 
 import asyncio

@@ -4,6 +4,21 @@ All notable changes to the Cairn Garmin worker are documented here. The format
 follows [Keep a Changelog](https://keepachangelog.com/), and the project aims
 to follow [Semantic Versioning](https://semver.org/). Dates are ISO-8601.
 
+## [Unreleased]
+
+### Changed
+- The image runs as the unprivileged user `cairn` (uid/gid 10001) instead of
+  root. Existing `/data` volumes written by the old image must be made
+  writable for that uid, otherwise cached Garmin tokens cannot be read.
+- Dependencies are locked with uv (`pyproject.toml` + `uv.lock`); the image
+  installs exactly the locked set. `requirements*.txt` are gone.
+- Base images are pinned by digest; release images get commit-derived
+  timestamps (`SOURCE_DATE_EPOCH`).
+- The dev-fallback token store defaults to `~/.cache/cairn-garth` instead of
+  `/tmp/cairn-garth`.
+- The MFA seeding recipe uses garminconnect, since garminconnect 0.3 no longer
+  depends on garth.
+
 ## [0.2.2] — 2026-09-14
 
 ### Fixed

@@ -1,0 +1,83 @@
+[project]
+name = "cairn-provider-garmin"
+version = "0.2.2"
+description = "Cairn worker that imports Garmin Connect activities and daily health metrics"
+readme = "README.md"
+license = "Apache-2.0"
+requires-python = ">=3.14,<3.15"
+dependencies = [
+    "garminconnect>=0.2.19",
+    "nats-py>=2.7.0",
+    "protobuf>=7.35",
+    "requests>=2.31",
+]
+
+[dependency-groups]
+dev = [
+    "deptry",
+    "mypy",
+    "pip-audit",
+    "pip-licenses",
+    "pytest",
+    "pytest-cov",
+    "ruff",
+    "types-protobuf>=7.35.1.20260906",
+    "types-requests",
+]
+
+[tool.uv]
+# A service, not a library: dependencies only, code runs from the checkout.
+package = false
+
+[tool.ruff]
+line-length = 120
+target-version = "py314"
+extend-exclude = ["proto"]
+# Hooks pass file names; keep the generated stubs excluded then too.
+force-exclude = true
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP", "SIM", "C4", "RUF", "BLE", "S", "PT", "ASYNC", "C90", "T20"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["S101", "S106"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["cairn_garmin", "cairn", "tests"]
+
+[tool.mypy]
+strict = true
+python_version = "3.14"
+mypy_path = "proto"
+files = ["cairn_garmin", "tests"]
+explicit_package_bases = true
+
+[[tool.mypy.overrides]]
+# garminconnect and garth ship no type information.
+module = ["garminconnect", "garminconnect.*", "garth", "garth.*"]
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+# Generated protobuf stubs under proto/: used for types, not checked themselves.
+module = ["cairn.*"]
+ignore_errors = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+addopts = "-q --strict-markers"
+
+[tool.coverage.run]
+source = ["cairn_garmin"]
+branch = true
+
+[tool.coverage.report]
+# The suite is at 91%; main.py (signal wiring) is the only untested module.
+fail_under = 85
+show_missing = true
+skip_covered = true
+
+[tool.deptry]
+known_first_party = ["cairn_garmin", "cairn", "tests"]
+# Generated stubs; the connect clients are unused by the worker.
+extend_exclude = ["proto"]

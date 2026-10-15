@@ -4,24 +4,29 @@ Job wire (server→worker) is hand-rolled JSON; results are protojson JobResult.
 Per-user Garmin credentials are fetched fresh per account via the
 cairn.creds.garmin.get request/reply (never queued in a job).
 """
+
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import logging
-from datetime import datetime, timedelta, timezone
+from collections.abc import Awaitable, Callable
+from datetime import UTC, datetime, timedelta
+from typing import Any
 
 import nats
+from google.protobuf import json_format
+from nats.aio.client import Client as NATS
+from nats.aio.msg import Msg
 from nats.errors import TimeoutError as NatsTimeout
 from nats.js import JetStreamContext
 
 import cairn_garmin  # noqa: F401 (proto path bootstrap)
 from cairn.worker.v1 import worker_service_pb2 as w
-from google.protobuf import json_format
 
-from . import archive
+from . import archive, mapping
 from . import config as C
-from . import mapping
 from .garmin_client import GarminClient
 from .manifest import manifest
 
@@ -31,33 +36,47 @@ DISCOVER_SUBJECT = f"cairn.discover.{C.PROVIDER}"
 CREDS_SUBJECT = "cairn.creds.garmin.get"
 PER_PAGE = 50
 
+Handler = Callable[[bytes], Awaitable[None]]
+
 
 class Worker:
-    def __init__(self, cfg: C.Config):
+    def __init__(self, cfg: C.Config) -> None:
         self.cfg = cfg
-        self.nc: nats.NATS | None = None
+        self.nc: NATS | None = None
         self.js: JetStreamContext | None = None
         self._stop = asyncio.Event()
         self._clients: dict[str, GarminClient] = {}  # account_id → client
         self._reconciled_at: dict[str, float] = {}  # account_id → loop time of last real reconcile
 
     @property
+    def _nats(self) -> NATS:
+        if self.nc is None:
+            raise RuntimeError("not connected to NATS")
+        return self.nc
+
+    @property
+    def _js(self) -> JetStreamContext:
+        if self.js is None:
+            raise RuntimeError("not connected to JetStream")
+        return self.js
+
+    @property
     def worker_key(self) -> str:
         return f"{C.WORKER_NAME}-{C.PROVIDER}"
 
     async def connect(self) -> None:
-        opts: dict = {"name": self.worker_key, "max_reconnect_attempts": -1}
+        opts: dict[str, Any] = {"name": self.worker_key, "max_reconnect_attempts": -1}
         if self.cfg.nats_user:
             opts["user"] = self.cfg.nats_user
             opts["password"] = self.cfg.nats_password
         # Auth is anonymous or user/password only (mirrors the Go worker).
-        self.nc = await nats.connect(self.cfg.nats_url, **opts)
-        self.js = self.nc.jetstream()
+        nc = await nats.connect(self.cfg.nats_url, **opts)
+        self.nc, self.js = nc, nc.jetstream()
         log.info("connected to %s", self.cfg.nats_url)
 
     async def run(self) -> None:
         await self.connect()
-        await self.nc.subscribe(DISCOVER_SUBJECT, cb=self._on_discover)
+        await self._nats.subscribe(DISCOVER_SUBJECT, cb=self._on_discover)
         tasks = [
             asyncio.create_task(self._heartbeat_loop()),
             asyncio.create_task(self._consume(C.SUBJ_FETCH, "fetch", self._handle_fetch_source)),
@@ -67,7 +86,11 @@ class Worker:
         ]
         log.info(
             "serving %s; pulling %s, %s, %s, %s",
-            DISCOVER_SUBJECT, C.SUBJ_FETCH, C.SUBJ_METRICS, C.SUBJ_PARSE_BLOB, C.SUBJ_RECONCILE,
+            DISCOVER_SUBJECT,
+            C.SUBJ_FETCH,
+            C.SUBJ_METRICS,
+            C.SUBJ_PARSE_BLOB,
+            C.SUBJ_RECONCILE,
         )
         await self._stop.wait()
         for t in tasks:
@@ -91,9 +114,7 @@ class Worker:
     async def _fetch_creds(self, account_id: str) -> tuple[str, str]:
         if account_id and self.nc is not None:
             try:
-                resp = await self.nc.request(
-                    CREDS_SUBJECT, json.dumps({"account_id": account_id}).encode(), timeout=5
-                )
+                resp = await self.nc.request(CREDS_SUBJECT, json.dumps({"account_id": account_id}).encode(), timeout=5)
                 data = json.loads(resp.data)
                 if not data.get("error") and data.get("email"):
                     return data["email"], data.get("password", "")
@@ -106,7 +127,7 @@ class Worker:
 
     # --- heartbeat ---
     async def _heartbeat_loop(self) -> None:
-        kv = await self.js.key_value(C.PRESENCE_KV)  # created by the server's stream bootstrap
+        kv = await self._js.key_value(C.PRESENCE_KV)  # created by the server's stream bootstrap
         key = f"{C.WORKER_NAME}.{self.cfg.instance_id}"
         while not self._stop.is_set():
             payload = {
@@ -118,19 +139,17 @@ class Worker:
                 "package": C.PACKAGE,
                 "webhooks": False,
                 "capabilities": manifest(),
-                "last_seen": datetime.now(timezone.utc).isoformat(),
+                "last_seen": datetime.now(UTC).isoformat(),
             }
             try:
                 await kv.put(key, json.dumps(payload).encode())
             except Exception as e:  # noqa: BLE001
                 log.debug("heartbeat failed: %s", e)
-            try:
+            with contextlib.suppress(TimeoutError):
                 await asyncio.wait_for(self._stop.wait(), timeout=self.cfg.heartbeat_interval_s)
-            except asyncio.TimeoutError:
-                pass
 
     # --- discover (request/reply): list activities for a page ---
-    async def _on_discover(self, msg) -> None:
+    async def _on_discover(self, msg: Msg) -> None:
         try:
             req = json.loads(msg.data)
             account_id = req.get("account_id", "")
@@ -169,18 +188,15 @@ class Worker:
     # (default 30s). Covers slow handlers AND messages waiting in the batch.
     ACK_EXTEND_S = 10
 
-    async def _extend_ack(self, m) -> None:
-        try:
+    async def _extend_ack(self, m: Msg) -> None:
+        # Ends on cancel, or once the message is acked/naked or the delivery is gone.
+        with contextlib.suppress(asyncio.CancelledError, Exception):
             while True:
                 await asyncio.sleep(self.ACK_EXTEND_S)
                 await m.in_progress()
-        except asyncio.CancelledError:
-            pass
-        except Exception:  # noqa: BLE001
-            pass  # message already acked/naked or delivery gone — heartbeat ends
 
-    async def _consume(self, subject: str, suffix: str, handler) -> None:
-        psub = await self.js.pull_subscribe(subject, durable=f"garmin-{suffix}", stream=C.JOB_STREAM)
+    async def _consume(self, subject: str, suffix: str, handler: Handler) -> None:
+        psub = await self._js.pull_subscribe(subject, durable=f"garmin-{suffix}", stream=C.JOB_STREAM)
         while not self._stop.is_set():
             try:
                 msgs = await psub.fetch(self.cfg.pull_batch, timeout=5)
@@ -194,25 +210,25 @@ class Worker:
             # batch is processed sequentially, and without this a slow handler
             # pushes the waiting messages past AckWait into redelivery loops.
             heartbeats = [asyncio.create_task(self._extend_ack(m)) for m in msgs]
-            for m, hb in zip(msgs, heartbeats):
+            for m, hb in zip(msgs, heartbeats, strict=True):
                 try:
                     await handler(m.data)
                     await m.ack()
                 except Exception as e:  # noqa: BLE001
                     deliveries = m.metadata.num_delivered or 1
                     if deliveries >= self.MAX_DELIVERIES:
-                        log.error("handler error on %s (delivery %d, terminating): %s",
-                                  subject, deliveries, e)
+                        log.error("handler error on %s (delivery %d, terminating): %s", subject, deliveries, e)
                         await self._publish_failure(subject, m.data, e)
                         await m.term()
                     else:
-                        log.error("handler error on %s (delivery %d/%d): %s",
-                                  subject, deliveries, self.MAX_DELIVERIES, e)
+                        log.error(
+                            "handler error on %s (delivery %d/%d): %s", subject, deliveries, self.MAX_DELIVERIES, e
+                        )
                         await m.nak(delay=self.NAK_DELAY_S)
                 finally:
                     hb.cancel()
 
-    async def _publish_result(self, subject: str, jr) -> None:
+    async def _publish_result(self, subject: str, jr: w.JobResult) -> None:
         """Publish a JobResult. Event-carrying results are claim-checked:
         the full protojson body goes to the blob store and only a small
         envelope with payload_ref travels over NATS, so stream-heavy
@@ -221,9 +237,9 @@ class Worker:
         """
         body = json_format.MessageToJson(jr).encode()
         if not jr.events:
-            await self.js.publish(subject, body)
+            await self._js.publish(subject, body)
             return
-        ref = await archive.upload_result(self.nc, body)
+        ref = await archive.upload_result(self._nats, body)
         env = w.JobResult(
             worker_name=jr.worker_name,
             worker_version=jr.worker_version,
@@ -236,7 +252,7 @@ class Worker:
         env.payload_ref.size_bytes = ref["size"]
         env.payload_ref.content_type = "application/json"
         env.payload_ref.content_sha256 = ref["sha256"]
-        await self.js.publish(subject, json_format.MessageToJson(env).encode())
+        await self._js.publish(subject, json_format.MessageToJson(env).encode())
 
     async def _publish_failure(self, job_subject: str, body: bytes, err: Exception) -> None:
         """Best-effort failure envelope published alongside a Term, so the
@@ -260,7 +276,7 @@ class Worker:
         jr.failed_ref.external_id = ext_id
         subject = job_subject.replace("cairn.jobs.", "cairn.results.", 1)
         try:
-            await self.js.publish(subject, json_format.MessageToJson(jr).encode())
+            await self._js.publish(subject, json_format.MessageToJson(jr).encode())
         except Exception as e:  # noqa: BLE001
             log.warning("failure result publish failed for %s: %s", ext_id, e)
 
@@ -281,15 +297,17 @@ class Worker:
             stream = mapping.activity_stream(details, mapping.start_ms(act))
 
         ref = w.ExternalRef(
-            user_id=user_id, provider=C.PROVIDER,
-            external_account_id=account_id, external_id=str(ext_id),
+            user_id=user_id,
+            provider=C.PROVIDER,
+            external_account_id=account_id,
+            external_id=str(ext_id),
         )
         imported = w.ImportedActivity(ref=ref, payload=mapping.activity_payload(act))
         if stream is not None:
             imported.stream.CopyFrom(stream)
 
         # Archive the raw response (best-effort) so it's viewable + re-parseable.
-        blob_id, blob_size = await archive.archive(self.nc, user_id, str(ext_id), act, details)
+        blob_id, blob_size = await archive.archive(self._nats, user_id, str(ext_id), act, details)
         if blob_id:
             imported.raw_blob_id = blob_id
             imported.raw_content_type = "application/json"
@@ -310,13 +328,15 @@ class Worker:
         ext_id = job.get("ext_id", "")
         fallback = blob.get("fallback_handle", "")
 
-        env = await archive.fetch(self.nc, blob.get("url", ""), fallback)
+        env = await archive.fetch(self._nats, blob.get("url", ""), fallback)
         act = env.get("activity") or {}
         details = env.get("details")
 
         ref = w.ExternalRef(
-            user_id=job.get("user_id", ""), provider=C.PROVIDER,
-            external_account_id=job.get("account_id", ""), external_id=str(ext_id),
+            user_id=job.get("user_id", ""),
+            provider=C.PROVIDER,
+            external_account_id=job.get("account_id", ""),
+            external_id=str(ext_id),
         )
         imported = w.ImportedActivity(ref=ref, payload=mapping.activity_payload(act))
         if details:
@@ -346,7 +366,6 @@ class Worker:
     async def _handle_reconcile(self, body: bytes) -> None:
         job = json.loads(body)
         account_id = job.get("account_id", "")
-        user_id = job.get("user_id", "")
         job_id = job.get("job_id", "")
 
         now = asyncio.get_running_loop().time()
@@ -355,64 +374,16 @@ class Worker:
             return  # coalesced — ack without API calls
         self._reconciled_at[account_id] = now
 
-        watermark = None
-        if raw := job.get("watermark"):
-            try:
-                watermark = datetime.fromisoformat(raw.replace("Z", "+00:00"))
-            except ValueError:
-                log.warning("reconcile: unparseable watermark %r", raw)
-
+        watermark = _parse_watermark(job.get("watermark"))
         # Window start: the later of (watermark - 1h drift margin) and the
         # lookback floor — always bounded to recent activity, never a flood.
-        window_start = datetime.now(timezone.utc) - timedelta(days=self.RECONCILE_LOOKBACK_DAYS)
-        if watermark is not None and watermark - timedelta(hours=1) > window_start:
-            window_start = watermark - timedelta(hours=1)
+        window_start = datetime.now(UTC) - timedelta(days=self.RECONCILE_LOOKBACK_DAYS)
+        if watermark is not None:
+            window_start = max(window_start, watermark - timedelta(hours=1))
 
-        max_enqueue = int(job.get("max_enqueue") or 0) or self.RECONCILE_MAX_ENQUEUE
-        known = set(job.get("known_ext_ids") or [])
-
-        client = await self._client_for(account_id)
-        enqueued = 0
-        high_water = watermark
-        offset, page_size = 0, PER_PAGE
-        while enqueued < max_enqueue:
-            acts = await asyncio.to_thread(client.list_activities, offset, page_size)
-            if not acts:
-                break
-            page_fully_in_window = True
-            for a in acts:
-                ext_id = a.get("activityId")
-                if ext_id is None:
-                    continue
-                ext_id = str(ext_id)
-                ms = mapping.start_ms(a)
-                start = datetime.fromtimestamp(ms / 1000, tz=timezone.utc) if ms else None
-                if start is not None and start < window_start:
-                    page_fully_in_window = False
-                    continue  # newest-first listing: rest of page is older
-                if ext_id in known:
-                    continue
-                fetch_body = json.dumps({
-                    "job_id": f"{job_id}:{ext_id}",
-                    "account_id": account_id,
-                    "user_id": user_id,
-                    "provider": C.PROVIDER,
-                    "ext_id": ext_id,
-                    "fetch_streams": True,
-                    "reason": "reconcile",
-                }).encode()
-                # Deterministic msg-id: duplicate enqueues within JetStream's
-                # dedup window collapse; ingest dedups idempotently beyond it.
-                msg_id = f"reconcile:{C.PROVIDER}:{account_id}:{ext_id}"
-                await self.js.publish(C.SUBJ_FETCH, fetch_body, headers={"Nats-Msg-Id": msg_id})
-                enqueued += 1
-                if start is not None and (high_water is None or start > high_water):
-                    high_water = start
-                if enqueued >= max_enqueue:
-                    break
-            if not page_fully_in_window or len(acts) < page_size:
-                break
-            offset += page_size
+        enqueued, high_water = await self._enqueue_unseen(job, window_start)
+        if watermark is not None:
+            high_water = max(high_water or watermark, watermark)
 
         # The result MUST be published even when nothing new was found —
         # advancing last_sync_at is what stops the scheduler from re-polling
@@ -420,25 +391,79 @@ class Worker:
         jr = w.JobResult(worker_name=C.WORKER_NAME, worker_version=C.VERSION, worker_package=C.PACKAGE)
         if high_water is not None:
             jr.new_watermark.FromDatetime(high_water)
-        await self.js.publish(
+        await self._js.publish(
             f"{C.RESULT_RECONCILE_PREFIX}.{account_id}",
             json_format.MessageToJson(jr).encode(),
             headers={"Nats-Msg-Id": f"result:{job_id}"},
         )
         log.info("reconcile for %s: %d new activity job(s) enqueued", account_id, enqueued)
 
+    async def _enqueue_unseen(self, job: dict[str, Any], window_start: datetime) -> tuple[int, datetime | None]:
+        """Enqueue fetch_source for listed activities inside the window and not yet known.
+        Returns the number enqueued and the newest enqueued start time."""
+        max_enqueue = int(job.get("max_enqueue") or 0) or self.RECONCILE_MAX_ENQUEUE
+        known = set(job.get("known_ext_ids") or [])
+        client = await self._client_for(job.get("account_id", ""))
+        enqueued = 0
+        high_water: datetime | None = None
+        offset, page_size = 0, PER_PAGE
+        while enqueued < max_enqueue:
+            acts = await asyncio.to_thread(client.list_activities, offset, page_size)
+            if not acts:
+                break
+            page_fully_in_window = True
+            for a in acts:
+                if a.get("activityId") is None:
+                    continue
+                ext_id = str(a["activityId"])
+                ms = mapping.start_ms(a)
+                start = datetime.fromtimestamp(ms / 1000, tz=UTC) if ms else None
+                if start is not None and start < window_start:
+                    page_fully_in_window = False
+                    continue  # newest-first listing: rest of page is older
+                if ext_id in known:
+                    continue
+                await self._enqueue_fetch(job, ext_id)
+                enqueued += 1
+                if start is not None:
+                    high_water = max(high_water or start, start)
+                if enqueued >= max_enqueue:
+                    break
+            if not page_fully_in_window or len(acts) < page_size:
+                break
+            offset += page_size
+        return enqueued, high_water
+
+    async def _enqueue_fetch(self, job: dict[str, Any], ext_id: str) -> None:
+        account_id = job.get("account_id", "")
+        fetch_body = json.dumps(
+            {
+                "job_id": f"{job.get('job_id', '')}:{ext_id}",
+                "account_id": account_id,
+                "user_id": job.get("user_id", ""),
+                "provider": C.PROVIDER,
+                "ext_id": ext_id,
+                "fetch_streams": True,
+                "reason": "reconcile",
+            }
+        ).encode()
+        # Deterministic msg-id: duplicate enqueues within JetStream's
+        # dedup window collapse; ingest dedups idempotently beyond it.
+        msg_id = f"reconcile:{C.PROVIDER}:{account_id}:{ext_id}"
+        await self._js.publish(C.SUBJ_FETCH, fetch_body, headers={"Nats-Msg-Id": msg_id})
+
     async def _handle_import_metrics(self, body: bytes) -> None:
         job = json.loads(body)
         account_id = job.get("account_id", "")
         user_id = job.get("user_id", "")
         client = await self._client_for(account_id)
-        since = datetime.fromtimestamp(int(job.get("since_unix", 0)), tz=timezone.utc).date()
-        until = datetime.fromtimestamp(int(job.get("until_unix", 0)), tz=timezone.utc).date()
+        since = datetime.fromtimestamp(int(job.get("since_unix", 0)), tz=UTC).date()
+        until = datetime.fromtimestamp(int(job.get("until_unix", 0)), tz=UTC).date()
 
-        events: list = []
+        events: list[w.WorkerEvent] = []
         day = since
         while day <= until and (day - since).days <= 365:
-            day_ms = int(datetime(day.year, day.month, day.day, tzinfo=timezone.utc).timestamp() * 1000)
+            day_ms = int(datetime(day.year, day.month, day.day, tzinfo=UTC).timestamp() * 1000)
             health = await asyncio.to_thread(client.daily_health, day.isoformat())
             for key, value in health.items():
                 events.append(mapping.metric_event(user_id, account_id, key, day_ms, float(value)))
@@ -451,8 +476,18 @@ class Worker:
         log.info("published %d health metrics for user %s", len(events), user_id)
 
 
-def _activity_time(act: dict) -> str:
+def _parse_watermark(raw: str | None) -> datetime | None:
+    if not raw:
+        return None
+    try:
+        return datetime.fromisoformat(raw.replace("Z", "+00:00"))
+    except ValueError:
+        log.warning("reconcile: unparseable watermark %r", raw)
+        return None
+
+
+def _activity_time(act: dict[str, Any]) -> str:
     ms = mapping.start_ms(act)
     if ms:
-        return datetime.fromtimestamp(ms / 1000, tz=timezone.utc).isoformat()
+        return datetime.fromtimestamp(ms / 1000, tz=UTC).isoformat()
     return ""

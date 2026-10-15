@@ -1,4 +1,5 @@
 """Worker configuration from environment."""
+
 from __future__ import annotations
 
 import os
@@ -50,7 +51,10 @@ class Config:
     garmin_email: str = field(default_factory=lambda: os.getenv("CAIRN_GARMIN_EMAIL", ""))
     garmin_password: str = field(default_factory=lambda: os.getenv("CAIRN_GARMIN_PASSWORD", ""))
     # Garth token store dir (persists Garmin session so we don't log in every job).
-    garth_home: str = field(default_factory=lambda: os.getenv("CAIRN_GARTH_HOME", "/tmp/cairn-garth"))
+    # Defaults to a per-user dir: the tokens are credentials, not for a shared /tmp.
+    garth_home: str = field(
+        default_factory=lambda: os.getenv("CAIRN_GARTH_HOME", os.path.expanduser("~/.cache/cairn-garth"))
+    )
 
 
 def load() -> Config:

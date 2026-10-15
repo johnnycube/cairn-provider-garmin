@@ -5,20 +5,22 @@ Garmin has no public activity OAuth API; garminconnect uses Garth SSO
 so we don't re-login per job. MFA accounts need a one-time interactive login to
 seed the token store.
 """
+
 from __future__ import annotations
 
 import logging
-from typing import Any, Callable, TypeVar
+from collections.abc import Callable
+from typing import Any
 
 from garminconnect import Garmin, GarminConnectAuthenticationError
 
 log = logging.getLogger("cairn.garmin")
 
-T = TypeVar("T")
+JSON = dict[str, Any]
 
 
 class GarminClient:
-    def __init__(self, email: str, password: str, garth_home: str):
+    def __init__(self, email: str, password: str, garth_home: str) -> None:
         self._email = email
         self._password = password
         self._garth_home = garth_home
@@ -30,42 +32,40 @@ class GarminClient:
         api = Garmin(self._email, self._password)
         try:
             api.login(self._garth_home)  # resume cached tokens if present
-        except Exception:
+        except Exception:  # noqa: BLE001
             api.login()  # fresh SSO
-            # garminconnect renamed the garth client attribute in 0.3 (garth → client).
-            store = getattr(api, "client", None) or api.garth
             try:
-                store.dump(self._garth_home)
+                api.client.dump(self._garth_home)
             except Exception as e:  # noqa: BLE001
-                log.warning("could not persist Garmin tokens to %s (next job logs in again): %s",
-                            self._garth_home, e)
+                log.warning("could not persist Garmin tokens to %s (next job logs in again): %s", self._garth_home, e)
         self._api = api
         return api
 
-    def list_activities(self, start: int = 0, limit: int = 50) -> list[dict]:
-        return self._client().get_activities(start, limit) or []
+    def list_activities(self, start: int = 0, limit: int = 50) -> list[JSON]:
+        acts = self._client().get_activities(start, limit)
+        return [a for a in acts if isinstance(a, dict)] if isinstance(acts, list) else []
 
-    def get_activity(self, activity_id: str) -> dict:
+    def get_activity(self, activity_id: str) -> JSON:
         return self._client().get_activity(activity_id)
 
-    def get_activity_details(self, activity_id: str) -> dict:
+    def get_activity_details(self, activity_id: str) -> JSON:
         # maxchart/maxpoly default to full resolution.
         return self._client().get_activity_details(activity_id)
 
     # --- health metrics (daily) ---
-    def hrv(self, day: str) -> dict | None:
+    def hrv(self, day: str) -> JSON | None:
         return _safe(lambda: self._client().get_hrv_data(day))
 
-    def sleep(self, day: str) -> dict | None:
+    def sleep(self, day: str) -> JSON | None:
         return _safe(lambda: self._client().get_sleep_data(day))
 
-    def resting_hr(self, day: str) -> dict | None:
+    def resting_hr(self, day: str) -> JSON | None:
         return _safe(lambda: self._client().get_rhr_day(day))
 
-    def steps(self, day: str) -> dict | None:
+    def steps(self, day: str) -> list[JSON] | None:
         return _safe(lambda: self._client().get_steps_data(day))
 
-    def weight(self, start: str, end: str) -> dict | None:
+    def weight(self, start: str, end: str) -> JSON | None:
         return _safe(lambda: self._client().get_body_composition(start, end))
 
     def daily_health(self, day: str) -> dict[str, float]:
@@ -79,7 +79,14 @@ class GarminClient:
         )
 
 
-def extract_daily_health(*, hrv, sleep, rhr, steps, wt) -> dict[str, float]:
+def extract_daily_health(
+    *,
+    hrv: JSON | None,
+    sleep: JSON | None,
+    rhr: JSON | None,
+    steps: list[JSON] | JSON | None,
+    wt: JSON | None,
+) -> dict[str, float]:
     """Pure extraction of {canonical DataType: scalar} from raw Garmin responses.
 
     Defensive — Garmin response shapes vary by version; missing metrics are
@@ -115,7 +122,7 @@ def _dig(d: Any, path: list[str]) -> Any:
     return cur
 
 
-def _sum_steps(steps) -> int | None:
+def _sum_steps(steps: object) -> int | None:
     if isinstance(steps, list):
         total = sum(int(s.get("steps", 0)) for s in steps if isinstance(s, dict))
         return total or None
@@ -125,7 +132,7 @@ def _sum_steps(steps) -> int | None:
     return None
 
 
-def _latest_weight_kg(wt: dict) -> float | None:
+def _latest_weight_kg(wt: JSON) -> float | None:
     rows = wt.get("dateWeightList") or wt.get("dailyWeightSummaries") or []
     grams = None
     if rows and isinstance(rows, list):
@@ -146,14 +153,14 @@ def _http_status(e: Exception) -> int | None:
     return getattr(resp, "status_code", None)
 
 
-def _safe(fn: Callable[[], T]) -> T | None:
+def _safe[T](fn: Callable[[], T]) -> T | None:
     """Treat a failed metric call as "no data" — except auth failures, which
     must surface so the job fails instead of importing an empty day."""
     try:
         return fn()
     except GarminConnectAuthenticationError:
         raise
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:
         status = _http_status(e)
         if status in (401, 403):
             raise

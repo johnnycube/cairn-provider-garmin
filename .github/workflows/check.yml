@@ -1,0 +1,51 @@
+# Runs `make check`, the definition of green: ruff, mypy strict, tests with a
+# coverage floor, audit (pip-audit, licenses, deptry, lockfile, gitleaks), the
+# image build with an import smoke test, and fleetlint.
+# Actions are pinned to commit SHAs; Renovate keeps the pins current.
+name: check
+on:
+  push:
+    branches: [main]
+  pull_request:
+  schedule:
+    - cron: "17 6 * * 1"   # weekly: catches new vulnerabilities in unchanged code
+
+permissions:
+  contents: read
+
+concurrency:
+  group: check-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0          # gitleaks scans the history
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
+        with:
+          enable-cache: true
+      - run: uv python install   # version from .python-version
+      - name: gitleaks, pinned and checksum-verified
+        env:
+          # renovate: datasource=github-releases depName=gitleaks/gitleaks
+          GITLEAKS_VERSION: v8.30.1
+        run: |
+          set -euo pipefail
+          mkdir -p "$HOME/.local/bin"
+          v=${GITLEAKS_VERSION#v}
+          base="https://github.com/gitleaks/gitleaks/releases/download/${GITLEAKS_VERSION}"
+          curl -sSfLO "${base}/gitleaks_${v}_linux_x64.tar.gz"
+          curl -sSfL "${base}/gitleaks_${v}_checksums.txt" | grep " gitleaks_${v}_linux_x64.tar.gz$" | sha256sum -c -
+          tar -xzf "gitleaks_${v}_linux_x64.tar.gz" -C "$HOME/.local/bin" gitleaks
+          rm "gitleaks_${v}_linux_x64.tar.gz"
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+      - name: Locked Python tools and fleetlint (pinned in uv.lock and the Makefile)
+        run: |
+          make tools
+          echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
+      - run: make check

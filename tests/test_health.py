@@ -1,12 +1,13 @@
 """Pure health-extraction tests (cairn_garmin.garmin_client.extract_daily_health)."""
+
 from cairn_garmin.garmin_client import (
-    extract_daily_health,
     _latest_weight_kg,
     _sum_steps,
+    extract_daily_health,
 )
 
 
-def test_full_extraction():
+def test_full_extraction() -> None:
     out = extract_daily_health(
         hrv={"hrvSummary": {"lastNightAvg": 62}},
         sleep={"dailySleepDTO": {"sleepTimeSeconds": 27000}},
@@ -23,31 +24,41 @@ def test_full_extraction():
     }
 
 
-def test_resting_hr_fallback_to_wellness_map():
+def test_resting_hr_fallback_to_wellness_map() -> None:
     # Direct restingHeartRate absent → fall back to the WELLNESS map (real bug fix).
     out = extract_daily_health(
-        hrv=None, sleep=None, steps=None, wt=None,
+        hrv=None,
+        sleep=None,
+        steps=None,
+        wt=None,
         rhr={"allMetrics": {"metricsMap": {"WELLNESS_RESTING_HEART_RATE": [{"value": 51}]}}},
     )
     assert out == {"RestingHR": 51.0}
 
 
-def test_missing_metrics_are_omitted():
+def test_missing_metrics_are_omitted() -> None:
     assert extract_daily_health(hrv=None, sleep=None, rhr=None, steps=None, wt=None) == {}
     # Present-but-empty shapes must not produce keys.
-    assert extract_daily_health(
-        hrv={}, sleep={"dailySleepDTO": {}}, rhr={}, steps=[], wt={},
-    ) == {}
+    assert (
+        extract_daily_health(
+            hrv={},
+            sleep={"dailySleepDTO": {}},
+            rhr={},
+            steps=[],
+            wt={},
+        )
+        == {}
+    )
 
 
-def test_steps_list_sums_intervals():
+def test_steps_list_sums_intervals() -> None:
     assert _sum_steps([{"steps": 100}, {"steps": 250}, {"steps": 0}]) == 350
     assert _sum_steps({"totalSteps": 999}) == 999
     assert _sum_steps([]) is None  # 0 total → omitted
     assert _sum_steps(None) is None
 
 
-def test_weight_grams_to_kg():
+def test_weight_grams_to_kg() -> None:
     assert _latest_weight_kg({"dateWeightList": [{"weight": 75500}]}) == 75.5
     # latest entry wins (last in the list)
     assert _latest_weight_kg({"dateWeightList": [{"weight": 80000}, {"weight": 79250}]}) == 79.25

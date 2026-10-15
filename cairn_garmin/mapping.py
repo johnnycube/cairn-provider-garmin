@@ -1,13 +1,17 @@
 """Map garminconnect dicts to cairn.worker.v1 proto messages."""
+
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
+
+from google.protobuf import duration_pb2, timestamp_pb2
 
 import cairn_garmin  # noqa: F401  (bootstraps the proto path)
 from cairn.v1 import activity_pb2 as a
 from cairn.worker.v1 import worker_service_pb2 as w
-from google.protobuf import duration_pb2, timestamp_pb2
+
+JSON = dict[str, Any]
 
 # Garmin typeKey → (ActivityType, Discipline, is_virtual).
 _SPORT = {
@@ -34,7 +38,7 @@ def _ts(epoch_ms: int | None) -> timestamp_pb2.Timestamp | None:
     if epoch_ms is None:
         return None
     t = timestamp_pb2.Timestamp()
-    t.FromDatetime(datetime.fromtimestamp(epoch_ms / 1000, tz=timezone.utc))
+    t.FromDatetime(datetime.fromtimestamp(epoch_ms / 1000, tz=UTC))
     return t
 
 
@@ -54,25 +58,20 @@ def _i(v: Any) -> int | None:
     return int(v) if isinstance(v, (int, float)) else None
 
 
-def _first(m: dict, *keys: str):
+def _first(m: JSON, *keys: str) -> Any:
     for k in keys:
         if m.get(k) is not None:
             return m[k]
     return None
 
 
-def _timezone(act: dict) -> str:
+def _timezone(act: JSON) -> str:
     """IANA timezone from Garmin's varied shapes; UTC fallback (required field)."""
     tzu = act.get("timeZoneUnitDTO") or {}
-    return (
-        tzu.get("timeZone")
-        or tzu.get("unitKey")
-        or act.get("timezone")
-        or "UTC"
-    )
+    return str(tzu.get("timeZone") or tzu.get("unitKey") or act.get("timezone") or "UTC")
 
 
-def start_ms(act: dict) -> int | None:
+def start_ms(act: JSON) -> int | None:
     """Garmin start as epoch ms, from beginTimestamp (ms) or startTimeGMT (ISO)."""
     if isinstance(act.get("beginTimestamp"), (int, float)):
         return int(act["beginTimestamp"])
@@ -80,13 +79,13 @@ def start_ms(act: dict) -> int | None:
     if isinstance(raw, str) and raw:
         for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%dT%H:%M:%S.%f", "%Y-%m-%dT%H:%M:%S"):
             try:
-                return int(datetime.strptime(raw, fmt).replace(tzinfo=timezone.utc).timestamp() * 1000)
+                return int(datetime.strptime(raw, fmt).replace(tzinfo=UTC).timestamp() * 1000)
             except ValueError:
                 continue
     return None
 
 
-def activity_payload(act: dict) -> a.ActivitySourcePayload:
+def activity_payload(act: JSON) -> a.ActivitySourcePayload:
     # get_activities (list) is flat; get_activity nests under summaryDTO/activityTypeDTO.
     m = {**(act.get("summaryDTO") or {}), **act}
     type_key = ((act.get("activityType") or act.get("activityTypeDTO") or {}) or {}).get("typeKey", "")
@@ -130,13 +129,22 @@ def activity_payload(act: dict) -> a.ActivitySourcePayload:
     _set(s, "max_power_w", _i(m.get("maxPower")))
     _set(s, "normalized_power_w", _i(_first(m, "normPower", "normalizedPower")))
     _set(s, "calories_kcal", _i(m.get("calories")))
-    _set(s, "avg_cadence", _i(_first(
-        m, "averageRunningCadenceInStepsPerMinute", "averageBikingCadenceInRevPerMinute", "averageRunCadence",
-    )))
+    _set(
+        s,
+        "avg_cadence",
+        _i(
+            _first(
+                m,
+                "averageRunningCadenceInStepsPerMinute",
+                "averageBikingCadenceInRevPerMinute",
+                "averageRunCadence",
+            )
+        ),
+    )
     return p
 
 
-def _set(summary, field: str, value) -> None:
+def _set(summary: a.ActivitySummary, field: str, value: float | None) -> None:
     """Set an optional summary field only when present (proto optionals)."""
     if value is not None:
         setattr(summary, field, value)
@@ -156,52 +164,30 @@ _CHANNELS = {
     "directAirTemperature": ("temperature_c", float),
 }
 _CHANNEL_ENUM = {
-    "latitude": a.STREAM_CHANNEL_LATITUDE, "longitude": a.STREAM_CHANNEL_LONGITUDE,
-    "altitude_m": a.STREAM_CHANNEL_ALTITUDE, "distance_m": a.STREAM_CHANNEL_DISTANCE,
-    "speed_mps": a.STREAM_CHANNEL_SPEED, "heart_rate_bpm": a.STREAM_CHANNEL_HEART_RATE,
-    "power_w": a.STREAM_CHANNEL_POWER, "cadence": a.STREAM_CHANNEL_CADENCE,
+    "latitude": a.STREAM_CHANNEL_LATITUDE,
+    "longitude": a.STREAM_CHANNEL_LONGITUDE,
+    "altitude_m": a.STREAM_CHANNEL_ALTITUDE,
+    "distance_m": a.STREAM_CHANNEL_DISTANCE,
+    "speed_mps": a.STREAM_CHANNEL_SPEED,
+    "heart_rate_bpm": a.STREAM_CHANNEL_HEART_RATE,
+    "power_w": a.STREAM_CHANNEL_POWER,
+    "cadence": a.STREAM_CHANNEL_CADENCE,
     "temperature_c": a.STREAM_CHANNEL_TEMPERATURE,
 }
 
 
-def activity_stream(details: dict, start_ms: int | None) -> a.ActivityStream | None:
+def activity_stream(details: JSON, start_ms: int | None) -> a.ActivityStream | None:
     """Map get_activity_details() metric arrays to a column-oriented ActivityStream."""
     descriptors = details.get("metricDescriptors") or []
     metrics = details.get("activityDetailMetrics") or []
     if not descriptors or not metrics:
         return None
 
-    # metricsIndex → our column name.
-    idx_to_col: dict[int, str] = {}
-    ts_idx: int | None = None
-    for d in descriptors:
-        key = d.get("key")
-        i = d.get("metricsIndex")
-        if key == "directTimestamp":
-            ts_idx = i
-        elif key in _CHANNELS:
-            idx_to_col[i] = _CHANNELS[key][0]
-
-    # Garmin details can repeat a timestamp (seen live on a Zwift-synced
-    # ride: 3 of 1977 rows duplicated around a pause). Keep the last row
-    # per timestamp — the server's (source, ts) stream key must be unique.
+    ts_idx, idx_to_col = _stream_columns(descriptors)
     if ts_idx is not None:
-        last_by_ts: dict = {}
-        deduped = []
-        for row in metrics:
-            vals = row.get("metrics") or []
-            ts = vals[ts_idx] if ts_idx < len(vals) else None
-            if ts is None:
-                deduped.append(row)
-                continue
-            if ts in last_by_ts:
-                deduped[last_by_ts[ts]] = row
-                continue
-            last_by_ts[ts] = len(deduped)
-            deduped.append(row)
-        metrics = deduped
+        metrics = _dedupe_timestamps(metrics, ts_idx)
 
-    cols: dict[str, list] = {c: [] for c in set(idx_to_col.values())}
+    cols: dict[str, list[Any]] = {c: [] for c in set(idx_to_col.values())}
     times: list[float] = []
     for row in metrics:
         vals = row.get("metrics") or []
@@ -213,6 +199,52 @@ def activity_stream(details: dict, start_ms: int | None) -> a.ActivityStream | N
     st = a.ActivityStream(sample_count=len(metrics), resolution_hz=1.0)
     if times:
         st.time_s.extend(times)
+    _fill_columns(st, cols)
+    if st.time_s:
+        st.channels.append(a.STREAM_CHANNEL_TIME)
+    return st
+
+
+def _stream_columns(descriptors: list[JSON]) -> tuple[int | None, dict[int, str]]:
+    """The timestamp's metricsIndex and metricsIndex → our column name."""
+    idx_to_col: dict[int, str] = {}
+    ts_idx: int | None = None
+    for d in descriptors:
+        key = d.get("key")
+        i = d.get("metricsIndex")
+        if not isinstance(i, int):
+            continue
+        if key == "directTimestamp":
+            ts_idx = i
+        elif key in _CHANNELS:
+            idx_to_col[i] = _CHANNELS[key][0]
+    return ts_idx, idx_to_col
+
+
+def _dedupe_timestamps(metrics: list[JSON], ts_idx: int) -> list[JSON]:
+    """Keep the last row per timestamp.
+
+    Garmin details can repeat a timestamp (seen live on a Zwift-synced ride:
+    3 of 1977 rows duplicated around a pause); the server's (source, ts)
+    stream key must be unique.
+    """
+    last_by_ts: dict[Any, int] = {}
+    deduped: list[JSON] = []
+    for row in metrics:
+        vals = row.get("metrics") or []
+        ts = vals[ts_idx] if ts_idx < len(vals) else None
+        if ts is None:
+            deduped.append(row)
+        elif ts in last_by_ts:
+            deduped[last_by_ts[ts]] = row
+        else:
+            last_by_ts[ts] = len(deduped)
+            deduped.append(row)
+    return deduped
+
+
+def _fill_columns(st: a.ActivityStream, cols: dict[str, list[Any]]) -> None:
+    """Coerce each non-empty column and register its channel."""
     for col, values in cols.items():
         coerce = float if col not in ("heart_rate_bpm", "power_w", "cadence") else int
         cleaned = [coerce(v) for v in values if v is not None]
@@ -221,16 +253,15 @@ def activity_stream(details: dict, start_ms: int | None) -> a.ActivityStream | N
         getattr(st, col).extend(cleaned)
         if col in _CHANNEL_ENUM:
             st.channels.append(_CHANNEL_ENUM[col])
-    if st.time_s:
-        st.channels.append(a.STREAM_CHANNEL_TIME)
-    return st
 
 
 def metric_event(user_id: str, account_id: str, key: str, day_ms: int, value: float) -> w.WorkerEvent:
     ts = timestamp_pb2.Timestamp()
-    ts.FromDatetime(datetime.fromtimestamp(day_ms / 1000, tz=timezone.utc))
+    ts.FromDatetime(datetime.fromtimestamp(day_ms / 1000, tz=UTC))
     im = w.ImportedMetric(
-        ref=w.ExternalRef(user_id=user_id, provider="garmin", external_account_id=account_id, external_id=f"{key}:{day_ms}"),
+        ref=w.ExternalRef(
+            user_id=user_id, provider="garmin", external_account_id=account_id, external_id=f"{key}:{day_ms}"
+        ),
         key=key,
         ts=ts,
         value_numeric=value,
