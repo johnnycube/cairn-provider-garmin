@@ -6,6 +6,25 @@ to follow [Semantic Versioning](https://semver.org/). Dates are ISO-8601.
 
 ## [Unreleased]
 
+## [0.3.1] — 2026-10-15
+
+### Added
+- Enrollment-token auth: with `CAIRN_WORKER_ENROLLMENT_TOKEN` set, the worker
+  presents the token on CONNECT (no client nkey) and is admitted by
+  cairn-core's NATS auth-callout, scoped to the `garmin` worker permission
+  template. Needs cairn-core 0.3.1 or later with the auth-callout enabled. The
+  token takes precedence over `CAIRN_NATS_USER`/`CAIRN_NATS_PASSWORD` (a
+  warning is logged if both are set); user/password and anonymous still work.
+- The NATS permission integration test also runs through the auth-callout
+  flow (nats-server with an `auth_callout` block and no nkey users, plus a
+  test responder issuing core-style user JWTs) and checks that a bad token is
+  refused.
+
+### Changed
+- The NATS connection name is now `CAIRN_WORKER_NAME` (was
+  `<name>-garmin`); core's auth-callout matches it against the enrollment
+  name.
+
 ## [0.3.0] — 2026-10-15
 
 Released alongside Cairn v0.3.0; no worker code changes since 0.2.3.
