@@ -6,6 +6,7 @@ defaults to the in-repo location. The stubs are generated from the Cairn
 proto contract and committed here — this worker has no dependency on
 cairn-core; the contract is the proto messages plus the NATS subjects.
 """
+
 from __future__ import annotations
 
 import os

@@ -3,10 +3,11 @@
 Garmin's value over Strava is health data: HRV, sleep, weight, steps, resting HR.
 Keys are canonical DataType identifiers (internal/domain/capability).
 """
+
 from __future__ import annotations
 
 
-def manifest() -> dict[str, dict]:
+def manifest() -> dict[str, dict[str, bool | str]]:
     return {
         "Activity": {"read": True, "backfill": True, "granularity": "per-activity"},
         "HRV": {"read": True, "backfill": True, "granularity": "daily"},
