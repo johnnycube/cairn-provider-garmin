@@ -17,17 +17,21 @@ proto contract when it changes.
 
 ## Run (dev)
 
+Dependencies are managed with [uv](https://docs.astral.sh/uv/) (`pyproject.toml`
++ `uv.lock`; Python version in `.python-version`).
+
 ```bash
-pip install -r requirements.txt
+uv sync --locked
 export CAIRN_NATS_URL=nats://localhost:4222
 export CAIRN_GARMIN_EMAIL=you@example.com   # dev fallback; prod creds come from the server
 export CAIRN_GARMIN_PASSWORD=...
-export PYTHONPATH=.                          # so `cairn_garmin` imports
-python -m cairn_garmin.main
+uv run python -m cairn_garmin.main
 ```
 
 The generated proto stubs are loaded from `./proto` (override with
-`CAIRN_PROTO_PATH`). Tests: `pip install -r requirements-dev.txt && pytest`.
+`CAIRN_PROTO_PATH`). `make check` runs lint, mypy strict, the tests with a
+coverage floor, the dependency audit, the image build and fleetlint; see
+[CONTRIBUTING.md](CONTRIBUTING.md) and [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
 ### MFA accounts
 
@@ -38,13 +42,17 @@ server puts in that connection's jobs (`default` for the env-var dev fallback):
 
 ```bash
 export CAIRN_GARMIN_EMAIL=you@example.com CAIRN_GARMIN_PASSWORD=...
-python -c "import garth, os; garth.login(os.environ['CAIRN_GARMIN_EMAIL'], os.environ['CAIRN_GARMIN_PASSWORD']); garth.save('/data/garth/<account_id>')"
+uv run python -c "import os; from garminconnect import Garmin; g = Garmin(os.environ['CAIRN_GARMIN_EMAIL'], os.environ['CAIRN_GARMIN_PASSWORD'], prompt_mfa=lambda: input('MFA code: ')); g.login(); g.client.dump('/data/garth/<account_id>')"
 ```
 
 The command prompts `MFA code:` on the terminal. Mount the resulting directory
 into the container (the image sets `CAIRN_GARTH_HOME=/data/garth` and declares
 `/data` as a volume); the worker resumes from the cached tokens and refreshes
 them itself.
+
+The image runs as the unprivileged user `cairn` (uid/gid 10001), so the token
+directory must be readable and writable by that uid (`chown -R 10001:10001`, or
+`fsGroup: 10001` in Kubernetes).
 
 ## Configuration
 
@@ -59,7 +67,7 @@ All settings are read from the environment in `cairn_garmin/config.py`.
 | `CAIRN_HEARTBEAT_INTERVAL_S` | `20` | Presence heartbeat interval. |
 | `CAIRN_PULL_BATCH` | `4` | Jobs fetched per pull. |
 | `CAIRN_GARMIN_EMAIL` / `CAIRN_GARMIN_PASSWORD` | empty | Dev fallback credentials, used only when a job carries no account. |
-| `CAIRN_GARTH_HOME` | `/tmp/cairn-garth` (`/data/garth` in the image) | Garth token store root; one subdirectory per account. |
+| `CAIRN_GARTH_HOME` | `~/.cache/cairn-garth` (`/data/garth` in the image) | Garth token store root; one subdirectory per account. |
 | `CAIRN_PROTO_PATH` | `./proto` | Location of the generated proto stubs. |
 
 Provider name (`garmin`), package and worker version are baked into
