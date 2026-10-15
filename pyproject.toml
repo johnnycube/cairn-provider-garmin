@@ -16,6 +16,7 @@ dependencies = [
 dev = [
     "deptry",
     "mypy",
+    "nkeys>=0.2.1",
     "pip-audit",
     "pip-licenses",
     "pytest",
@@ -53,8 +54,8 @@ files = ["cairn_garmin", "tests"]
 explicit_package_bases = true
 
 [[tool.mypy.overrides]]
-# garminconnect and garth ship no type information.
-module = ["garminconnect", "garminconnect.*", "garth", "garth.*"]
+# garminconnect, garth and nkeys ship no type information.
+module = ["garminconnect", "garminconnect.*", "garth", "garth.*", "nkeys"]
 ignore_missing_imports = true
 
 [[tool.mypy.overrides]]

@@ -61,7 +61,8 @@ All settings are read from the environment in `cairn_garmin/config.py`.
 | Variable | Default | Purpose |
 | --- | --- | --- |
 | `CAIRN_NATS_URL` | `nats://localhost:4222` | NATS server. |
-| `CAIRN_NATS_USER` / `CAIRN_NATS_PASSWORD` | empty (anonymous) | NATS user/password auth. |
+| `CAIRN_WORKER_ENROLLMENT_TOKEN` | empty | Enrollment token from cairn-core; sent as the NATS CONNECT token. Takes precedence over user/password. See [NATS auth](#nats-auth). |
+| `CAIRN_NATS_USER` / `CAIRN_NATS_PASSWORD` | empty (anonymous) | Static NATS user/password auth, used when no enrollment token is set. |
 | `CAIRN_WORKER_NAME` | `garmin-fetcher` | Routing identity; must match the server-side enrollment name. Shared by all replicas. |
 | `CAIRN_WORKER_INSTANCE_ID` | random 12-hex id | Per-replica presence key. Set to the pod name so a restart reuses its key. |
 | `CAIRN_HEARTBEAT_INTERVAL_S` | `20` | Presence heartbeat interval. |
@@ -72,6 +73,30 @@ All settings are read from the environment in `cairn_garmin/config.py`.
 
 Provider name (`garmin`), package and worker version are baked into
 `config.py` and are not overridable; they define the worker's contract.
+
+### NATS auth
+
+The worker connects in one of three ways, in this order of precedence:
+
+1. **Enrollment token** (`CAIRN_WORKER_ENROLLMENT_TOKEN`, recommended). Create
+   an enrollment in cairn-core (`POST /api/admin/worker-enrollments`, provider
+   `garmin`, name = `CAIRN_WORKER_NAME`). The worker presents only the token
+   on CONNECT, with the connection name set to `CAIRN_WORKER_NAME`; no client
+   nkey is used. nats-server hands the connection to core's auth-callout, which
+   validates the enrollment and returns a user JWT limited to core's worker
+   permission template for `garmin`. Needs cairn-core 0.3.1 or later with the
+   auth-callout enabled (`CAIRN_NATS_AUTH_CALLOUT=true`,
+   `CAIRN_NATS_WORKER_ACCOUNT`; see core's `docker/nats-auth-callout.conf`).
+   If user/password is also set, it is ignored with a warning.
+2. **User/password** (`CAIRN_NATS_USER` / `CAIRN_NATS_PASSWORD`): a static
+   nats.conf user, e.g. for a server without the auth-callout. Its permissions
+   must grant the worker permission template's subjects for `garmin`.
+3. **Anonymous**, for a dev server without auth.
+
+`tests/test_nats_permissions.py` runs the worker's NATS operations against a
+real nats-server both ways: as a static user carrying the template, and through
+the auth-callout flow with a test responder that issues the user JWT the way
+core does.
 
 ## What it does
 

@@ -65,11 +65,15 @@ class Worker:
         return f"{C.WORKER_NAME}-{C.PROVIDER}"
 
     async def connect(self) -> None:
-        opts: dict[str, Any] = {"name": self.worker_key, "max_reconnect_attempts": -1}
-        if self.cfg.nats_user:
+        # The auth-callout matches the connection name against the enrollment name.
+        opts: dict[str, Any] = {"name": C.WORKER_NAME, "max_reconnect_attempts": -1}
+        if self.cfg.enrollment_token:
+            if self.cfg.nats_user:
+                log.warning("CAIRN_WORKER_ENROLLMENT_TOKEN is set; ignoring CAIRN_NATS_USER/CAIRN_NATS_PASSWORD")
+            opts["token"] = self.cfg.enrollment_token
+        elif self.cfg.nats_user:
             opts["user"] = self.cfg.nats_user
             opts["password"] = self.cfg.nats_password
-        # Auth is anonymous or user/password only (mirrors the Go worker).
         nc = await nats.connect(self.cfg.nats_url, **opts)
         self.nc, self.js = nc, nc.jetstream()
         log.info("connected to %s", self.cfg.nats_url)
