@@ -16,15 +16,19 @@ LICENSES    ?= MIT;BSD;Apache;ISC;PSF;Python Software Foundation;Mozilla Public 
 GITLEAKS_VERSION  ?= v8.30.1
 # renovate: datasource=go depName=github.com/fleetlint/fleetlint
 FLEETLINT_VERSION ?= v0.4.0
+# nats-server for the permission integration test; go install verifies it against sum.golang.org.
+# renovate: datasource=go depName=github.com/nats-io/nats-server/v2
+NATS_SERVER_VERSION ?= v2.15.1
 
 .PHONY: help tools fmt lint test cover audit bench build image dist check-fast check release clean
 
 help: ## list targets
 	@grep -E '^[a-z-]+:.*##' $(MAKEFILE_LIST) | awk -F':.*##' '{printf "  %-12s %s\n", $$1, $$2}'
 
-tools: ## install the locked Python toolchain and fleetlint (gitleaks GITLEAKS_VERSION comes from its release page)
+tools: ## install the locked Python toolchain, fleetlint and nats-server (gitleaks GITLEAKS_VERSION comes from its release page)
 	uv sync --locked
 	go install github.com/fleetlint/fleetlint/cmd/fleetlint@$(FLEETLINT_VERSION)
+	go install github.com/nats-io/nats-server/v2@$(NATS_SERVER_VERSION)
 
 fmt: ## format and autofix in place
 	$(UV) ruff format
