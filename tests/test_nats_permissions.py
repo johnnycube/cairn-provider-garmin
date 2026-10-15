@@ -1,8 +1,11 @@
 """The worker's real NATS operations against a nats-server that grants exactly
-cairn-core's StandardPermissionTemplate (auth-callout), so a subject the
-template lacks fails here instead of in production."""
+cairn-core's StandardPermissionTemplate, so a subject the template lacks fails
+here instead of in production. Runs twice: a static user carrying the template,
+and core's auth-callout flow (enrollment token -> user JWT) with a test responder."""
 
 import asyncio
+import base64
+import hashlib
 import json
 import logging
 import os
@@ -12,12 +15,14 @@ import subprocess
 import threading
 import time
 from collections.abc import Awaitable, Callable, Iterator
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any, ClassVar, cast
 
 import nats
+import nkeys
 import pytest
 from nats.aio.client import Client as NATS
 from nats.aio.msg import Msg
@@ -32,6 +37,7 @@ WORKER_KEY = f"{C.WORKER_NAME}-{PROVIDER}"
 ACCOUNT = "acc-1"
 JOB_STREAM, WEBHOOK_STREAM = "CAIRN_JOBS", "CAIRN_WEBHOOKS"
 BUCKETS = ["cairn_worker_presence", "cairn_worker_manifests", "cairn_rate_limits"]
+TOKEN, BAD_TOKEN = "enroll-garmin", "wrong"
 
 
 def standard_template(p: str, wk: str) -> tuple[list[str], list[str]]:
@@ -84,25 +90,37 @@ def _free_port() -> int:
         return int(s.getsockname()[1])
 
 
-@pytest.fixture
-def nats_url(tmp_path: Path) -> Iterator[str]:
+@dataclass
+class Env:
+    url: str
+    mode: str
+    worker_auth: dict[str, Any]
+    account_kp: nkeys.KeyPair | None = None
+    callouts: list[dict[str, Any]] = field(default_factory=list)
+
+
+def _account_kp() -> nkeys.KeyPair:
+    return nkeys.from_seed(nkeys.encode_seed(os.urandom(32), nkeys.PREFIX_BYTE_ACCOUNT))
+
+
+@pytest.fixture(params=["static", "callout"])
+def env(request: pytest.FixtureRequest, tmp_path: Path) -> Iterator[Env]:
     publish, subscribe = standard_template(PROVIDER, WORKER_KEY)
     port = _free_port()
-    conf = {
-        "host": "127.0.0.1",
-        "port": port,
-        "jetstream": {"store_dir": str(tmp_path / "js")},
-        "authorization": {
-            "users": [
-                {"user": "admin", "password": "admin"},
-                {
-                    "user": "worker",
-                    "password": "worker",
-                    "permissions": {"publish": {"allow": publish}, "subscribe": {"allow": subscribe}},
-                },
-            ]
-        },
-    }
+    conf: dict[str, Any] = {"host": "127.0.0.1", "port": port, "jetstream": {"store_dir": str(tmp_path / "js")}}
+    if request.param == "static":
+        perms = {"publish": {"allow": publish}, "subscribe": {"allow": subscribe}}
+        users = [{"user": "admin", "password": "admin"}, {"user": "worker", "password": "worker", "permissions": perms}]
+        conf["authorization"] = {"users": users}
+        e = Env("", "static", {"nats_user": "worker", "nats_password": "worker"})
+    else:
+        # Like core's docker/nats-auth-callout.conf, minus the placeholder nkey user.
+        kp = _account_kp()
+        conf["accounts"] = {"CAIRN": {"jetstream": "enabled", "users": [{"user": "admin", "password": "admin"}]}}
+        conf["authorization"] = {
+            "auth_callout": {"issuer": kp.public_key.decode(), "account": "CAIRN", "auth_users": ["admin"]}
+        }
+        e = Env("", "callout", {"enrollment_token": TOKEN}, kp)
     path = tmp_path / "nats.conf"
     path.write_text(json.dumps(conf))
     proc = subprocess.Popen([_nats_server_bin(), "-c", str(path)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)  # noqa: S603
@@ -116,9 +134,67 @@ def nats_url(tmp_path: Path) -> Iterator[str]:
                 proc.kill()
                 pytest.fail("nats-server did not start")
             time.sleep(0.05)
-    yield f"nats://127.0.0.1:{port}"
+    e.url = f"nats://127.0.0.1:{port}"
+    yield e
     proc.terminate()
     proc.wait(timeout=10)
+
+
+def _b64(b: bytes) -> str:
+    return base64.urlsafe_b64encode(b).rstrip(b"=").decode()
+
+
+def _jwt(claims: dict[str, Any], kp: nkeys.KeyPair) -> str:
+    """Encode + sign NATS JWT claims the way nats-io/jwt v2 does (ed25519-nkey)."""
+    claims = {**claims, "iat": int(time.time()), "iss": kp.public_key.decode(), "jti": ""}
+    claims["jti"] = base64.b32encode(hashlib.sha256(json.dumps(claims).encode()).digest()).rstrip(b"=").decode()
+    head = _b64(json.dumps({"typ": "JWT", "alg": "ed25519-nkey"}).encode()) + "." + _b64(json.dumps(claims).encode())
+    return head + "." + _b64(kp.sign(head.encode()))
+
+
+def _decode(token: str) -> dict[str, Any]:
+    body = token.split(".")[1]
+    return cast(dict[str, Any], json.loads(base64.urlsafe_b64decode(body + "=" * (-len(body) % 4))))
+
+
+async def _serve_callout(nc: NATS, e: Env) -> None:
+    """Stand-in for core's AuthCalloutSubscriber: admit TOKEN as the garmin enrollment."""
+    kp = e.account_kp
+    assert kp is not None
+    publish, subscribe = standard_template(PROVIDER, WORKER_KEY)
+
+    async def on_auth(m: Msg) -> None:
+        req = _decode(m.data.decode())["nats"]
+        user_nkey, server_id, opts = req["user_nkey"], req["server_id"]["id"], req["connect_opts"]
+        e.callouts.append(opts)
+        resp: dict[str, Any] = {"sub": user_nkey, "aud": server_id}
+        nats_claims: dict[str, Any] = {"type": "authorization_response", "version": 2}
+        nats_claims["issuer_account"] = kp.public_key.decode()
+        if opts.get("auth_token") != TOKEN:
+            nats_claims["error"] = "unknown_token"
+        elif opts.get("name") != C.WORKER_NAME:
+            nats_claims["error"] = "name_mismatch"
+        else:
+            user = {
+                "sub": user_nkey,
+                "aud": "CAIRN",
+                "name": WORKER_KEY,
+                "exp": int(time.time()) + 3600,
+                "nats": {
+                    "pub": {"allow": publish},
+                    "sub": {"allow": subscribe},
+                    "subs": -1,
+                    "data": -1,
+                    "payload": -1,
+                    "type": "user",
+                    "version": 2,
+                },
+            }
+            nats_claims["jwt"] = _jwt(user, kp)
+        await m.respond(_jwt({**resp, "nats": nats_claims}, kp).encode())
+
+    await nc.subscribe("$SYS.REQ.USER.AUTH", cb=on_auth)
+    await nc.flush()
 
 
 class BlobStore(BaseHTTPRequestHandler):
@@ -182,9 +258,11 @@ async def _until(cond: Callable[[], Awaitable[bool]], what: str) -> None:
         raise AssertionError(f"timed out waiting for {what}") from None
 
 
-async def _admin(url: str, blob_url: str) -> tuple[NATS, list[str], list[bytes]]:
+async def _admin(e: Env, blob_url: str) -> tuple[NATS, list[str], list[bytes]]:
     """Bootstrap streams/KV like core and serve the server-side request/reply subjects."""
-    nc = await nats.connect(url, user="admin", password="admin")
+    nc = await nats.connect(e.url, user="admin", password="admin")
+    if e.mode == "callout":
+        await _serve_callout(nc, e)
     js = nc.jetstream()
     await js.add_stream(StreamConfig(name=JOB_STREAM, subjects=["cairn.jobs.>"], retention=RetentionPolicy.WORK_QUEUE))
     await js.add_stream(StreamConfig(name="CAIRN_RESULTS", subjects=["cairn.results.>"]))
@@ -220,15 +298,13 @@ def _violations(caplog: pytest.LogCaptureFixture) -> list[str]:
     return [r.getMessage() + str(r.exc_info) for r in caplog.records if "ermission" in str(r.exc_info) + r.getMessage()]
 
 
-def test_worker_runs_under_standard_template(nats_url: str, blob_url: str, caplog: pytest.LogCaptureFixture) -> None:
+def test_worker_runs_under_standard_template(env: Env, blob_url: str, caplog: pytest.LogCaptureFixture) -> None:
     caplog.set_level(logging.DEBUG)
 
     async def scenario() -> None:
-        admin, results, _ = await _admin(nats_url, blob_url)
+        admin, results, _ = await _admin(env, blob_url)
         ajs = admin.jetstream()
-        wk = runtime.Worker(
-            C.Config(nats_url=nats_url, nats_user="worker", nats_password="worker", garth_home="/nonexistent")
-        )
+        wk = runtime.Worker(C.Config(nats_url=env.url, garth_home="/nonexistent", **env.worker_auth))
         wk.MAX_DELIVERIES = 1
         wk._clients = {ACCOUNT: cast(GarminClient, RecentClient())}
         run = asyncio.create_task(wk.run())
@@ -294,16 +370,52 @@ def test_worker_runs_under_standard_template(nats_url: str, blob_url: str, caplo
     assert _violations(caplog) == []
 
 
-def test_template_rejects_foreign_subjects(nats_url: str, caplog: pytest.LogCaptureFixture) -> None:
+def test_template_rejects_foreign_subjects(env: Env, blob_url: str, caplog: pytest.LogCaptureFixture) -> None:
     """Control: the server really enforces the template."""
 
     async def scenario() -> None:
-        nc = await nats.connect(nats_url, user="worker", password="worker")
-        await nc.publish(f"cairn.jobs.reconcile.{PROVIDER}", b"{}")
-        await nc.publish("cairn.creds.strava.get", b"{}")
-        await nc.flush()
+        admin, _, _ = await _admin(env, blob_url)
+        wk = runtime.Worker(C.Config(nats_url=env.url, **env.worker_auth))
+        await wk.connect()
+        await wk._nats.publish(f"cairn.jobs.reconcile.{PROVIDER}", b"{}")
+        await wk._nats.publish("cairn.creds.strava.get", b"{}")
+        await wk._nats.flush()
         await asyncio.sleep(0.3)
-        await nc.close()
+        await wk._nats.close()
+        await admin.close()
 
     asyncio.run(scenario())
     assert len(_violations(caplog)) == 2
+    if env.mode == "callout":
+        assert len(env.callouts) == 1
+        assert "nkey" not in env.callouts[0]  # token only, no client nkey
+
+
+@pytest.mark.parametrize("env", ["callout"], indirect=True)
+def test_token_wins_over_user_password(env: Env, blob_url: str, caplog: pytest.LogCaptureFixture) -> None:
+    async def scenario() -> None:
+        admin, _, _ = await _admin(env, blob_url)
+        cfg = C.Config(nats_url=env.url, enrollment_token=TOKEN, nats_user="admin", nats_password="admin")
+        wk = runtime.Worker(cfg)
+        await wk.connect()
+        await wk._nats.close()
+        await admin.close()
+
+    asyncio.run(scenario())
+    assert len(env.callouts) == 1
+    assert env.callouts[0].get("user") is None
+    assert any("ignoring CAIRN_NATS_USER" in r.getMessage() for r in caplog.records)
+
+
+@pytest.mark.parametrize("env", ["callout"], indirect=True)
+def test_callout_refuses_unknown_token(env: Env, blob_url: str) -> None:
+    async def scenario() -> None:
+        admin, _, _ = await _admin(env, blob_url)
+        with pytest.raises(nats.errors.Error):
+            await nats.connect(
+                env.url, token=BAD_TOKEN, name=C.WORKER_NAME, max_reconnect_attempts=0, allow_reconnect=False
+            )
+        await admin.close()
+
+    asyncio.run(scenario())
+    assert env.callouts[0]["auth_token"] == BAD_TOKEN
