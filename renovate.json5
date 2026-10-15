@@ -1,0 +1,74 @@
+// Renovate configuration for github.com/johnnycube/cairn-provider-garmin
+// Docs: https://docs.renovatebot.com/configuration-options/
+// Validate locally: npx --yes renovate-config-validator renovate.json5
+{
+  $schema: 'https://docs.renovatebot.com/renovate-schema.json',
+
+  extends: [
+    // config:recommended plus Action digest pinning, Docker digest pinning and
+    // config migration PRs.
+    'config:best-practices',
+    // Conventional commit messages ("chore(deps): ...").
+    ':semanticCommits',
+    // Batch routine updates into Monday mornings; security updates ignore the schedule.
+    'schedule:earlyMondays',
+    // Tool pins: `# renovate:` comments above *_VERSION in the Makefile and workflow env blocks.
+    'customManagers:makefileVersions',
+    'customManagers:githubActionsVersions',
+  ],
+
+  // Hook revisions in .pre-commit-config.yaml.
+  'pre-commit': {
+    enabled: true,
+  },
+
+  timezone: 'Europe/Berlin',
+  labels: ['dependencies'],
+
+  prConcurrentLimit: 10,
+  prHourlyLimit: 2,
+
+  // Never propose a release younger than 3 days; security fixes bypass this.
+  minimumReleaseAge: '3 days',
+  internalChecksFilter: 'strict',
+
+  packageRules: [
+    {
+      description: 'Group non-major Python dependency updates (pyproject.toml + uv.lock) into one weekly PR.',
+      matchManagers: ['pep621'],
+      matchUpdateTypes: ['minor', 'patch'],
+      groupName: 'python dependencies (non-major)',
+    },
+    {
+      description: 'Major Python dependency updates stay individual PRs for explicit review.',
+      matchManagers: ['pep621'],
+      matchUpdateTypes: ['major'],
+      dependencyDashboardApproval: true,
+    },
+    {
+      description: 'Python minor bumps (.python-version, requires-python, base image) are one PR, approved explicitly.',
+      matchDepNames: ['python', 'docker.io/library/python'],
+      matchUpdateTypes: ['major', 'minor'],
+      groupName: 'python toolchain',
+      dependencyDashboardApproval: true,
+    },
+    {
+      description: 'GitHub Actions: digest/non-major bumps are low risk behind a green CI gate - automerge once checks pass.',
+      matchManagers: ['github-actions'],
+      matchUpdateTypes: ['minor', 'patch', 'pin', 'digest'],
+      automerge: true,
+      platformAutomerge: true,
+    },
+  ],
+
+  // Refresh uv.lock (transitive pins) monthly between explicit bumps.
+  lockFileMaintenance: {
+    enabled: true,
+    schedule: ['before 6am on the first day of the month'],
+  },
+
+  osvVulnerabilityAlerts: true,
+  vulnerabilityAlerts: {
+    labels: ['security'],
+  },
+}

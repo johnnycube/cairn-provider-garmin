@@ -1,8 +1,7 @@
 name: Build & push garmin-worker image
 
-# Builds the Cairn Garmin worker image (Dockerfile) with BuildKit and, on a
-# successful build, pushes it to the GitHub Container Registry tagged by git tag
-# and commit hash.
+# Builds the Cairn Garmin worker image (Dockerfile) with BuildKit and pushes it
+# to the GitHub Container Registry tagged by git tag and commit hash.
 #
 # Registry: ghcr.io/johnnycube/cairn-provider-garmin
 # Auth: the built-in GITHUB_TOKEN (packages: write) — no extra secret needed.
@@ -10,86 +9,100 @@ name: Build & push garmin-worker image
 # Supply chain: pushed images carry BuildKit SLSA provenance + SBOM
 # attestations, are signed keyless with cosign (Fulcio cert bound to this
 # workflow's OIDC identity, logged in Rekor), and get a GitHub provenance
-# attestation (verifiable via `gh attestation verify`). Verify with:
+# attestation (verifiable via `gh attestation verify`). Layer and config
+# timestamps come from the commit (SOURCE_DATE_EPOCH) so rebuilds of a tag
+# match. Verify with:
 #   cosign verify ghcr.io/johnnycube/cairn-provider-garmin:<tag> \
 #     --certificate-oidc-issuer https://token.actions.githubusercontent.com \
 #     --certificate-identity-regexp \
 #       '^https://github.com/johnnycube/cairn-provider-garmin/\.github/workflows/build\.yml@.*'
 #
-# The Garmin worker is Python; the generated proto stubs it imports (./proto)
-# are committed, so no `make proto` / buf step is needed. This repo has no
-# dependency on cairn-core.
-#
-# NB: this does NOT use the shared cairn-build-base toolchain image (unlike the
-# Go core/strava jobs). build-base ships Debian's Python 3.11, but this worker
-# pins Python 3.14 — so CI and the image use python:3.14 directly instead.
+# The generated proto stubs the worker imports (./proto) are committed, so no
+# buf step is needed. This repo has no dependency on cairn-core.
 #
 # Triggers:
 #   - push to the default branch  → publishes  sha-<short>  (+ latest)
 #   - push of a v* git tag        → publishes  <tag>  + sha-<short>
-#   - pull_request                → builds only (no push), as a gate
+# Pull requests are gated by check.yml, whose `make check` builds the same image.
 
 on:
   push:
     branches: [main]
     tags: ['v*']
-  pull_request:
 
 concurrency:
   group: build-worker-garmin-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: false   # never abandon a push halfway through signing
 
 permissions:
   contents: read
-  packages: write
 
 env:
   REGISTRY: ghcr.io
   IMAGE: ghcr.io/johnnycube/cairn-provider-garmin
 
 jobs:
-  # Gate: the worker must import + byte-compile cleanly with its real deps.
-  test:
-    name: Worker checks
+  # Unprivileged gate: the full check passes, and a tag is on main.
+  verify:
+    name: make check
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
-      - name: Checkout
-        uses: actions/checkout@v7
-      - name: Set up Python
-        uses: actions/setup-python@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          python-version: '3.14'
-      - name: Install dependencies
-        run: pip install --no-cache-dir -r requirements-dev.txt
-      - name: Byte-compile package
-        run: python -m compileall -q cairn_garmin
-      - name: Run tests
-        run: python -m pytest tests -q
-      - name: Import smoke test
-        run: python -c "import cairn_garmin.runtime, cairn_garmin.archive"
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
+        with:
+          enable-cache: false     # a publishing run does not read caches other runs wrote
+      - run: uv python install
+      - name: gitleaks, pinned and checksum-verified
+        env:
+          # renovate: datasource=github-releases depName=gitleaks/gitleaks
+          GITLEAKS_VERSION: v8.30.1
+        run: |
+          set -euo pipefail
+          mkdir -p "$HOME/.local/bin"
+          v=${GITLEAKS_VERSION#v}
+          base="https://github.com/gitleaks/gitleaks/releases/download/${GITLEAKS_VERSION}"
+          curl -sSfLO "${base}/gitleaks_${v}_linux_x64.tar.gz"
+          curl -sSfL "${base}/gitleaks_${v}_checksums.txt" | grep " gitleaks_${v}_linux_x64.tar.gz$" | sha256sum -c -
+          tar -xzf "gitleaks_${v}_linux_x64.tar.gz" -C "$HOME/.local/bin" gitleaks
+          rm "gitleaks_${v}_linux_x64.tar.gz"
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+      - name: Verify a tag is on main and the check passes
+        run: |
+          if [[ "$GITHUB_REF" == refs/tags/* ]]; then
+            git merge-base --is-ancestor "$GITHUB_SHA" origin/main || { echo "tag not on main"; exit 1; }
+          fi
+          make tools
+          export PATH="$(go env GOPATH)/bin:$PATH"
+          make check
 
   build-push:
     name: Build & push cairn-provider-garmin
     runs-on: ubuntu-latest
-    needs: test
-    # id-token/attestations only here — the test job stays unprivileged. This
-    # job also runs on PRs (build-only gate); the sign/attest steps are gated
-    # off there, and fork PRs get no OIDC token anyway.
+    needs: verify
+    timeout-minutes: 30
     permissions:
       contents: read
-      packages: write
-      id-token: write
+      packages: write             # push to ghcr
+      id-token: write             # keyless cosign and the attestation
       attestations: write
     steps:
-      - name: Checkout
-        uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v4
+      - name: Commit time for reproducible timestamps
+        id: epoch
+        run: echo "epoch=$(git log -1 --format=%ct)" >> "$GITHUB_OUTPUT"
+
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
 
       - name: Compute tags & labels
         id: meta
-        uses: docker/metadata-action@v6
+        uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6.2.0
         with:
           images: ${{ env.IMAGE }}
           tags: |
@@ -97,11 +110,8 @@ jobs:
             type=sha,format=short
             type=raw,value=latest,enable={{is_default_branch}}
 
-      # Publish only from main or a v* release tag — never from PRs/feature
-      # branches (which build as a gate but must not touch the registry).
       - name: Log in to GitHub Container Registry
-        if: github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v')
-        uses: docker/login-action@v4
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
         with:
           registry: ${{ env.REGISTRY }}
           username: ${{ github.actor }}
@@ -109,34 +119,33 @@ jobs:
 
       - name: Build & push (BuildKit)
         id: build
-        uses: docker/build-push-action@v7
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        env:
+          SOURCE_DATE_EPOCH: ${{ steps.epoch.outputs.epoch }}
         with:
           context: .
           file: Dockerfile
-          push: ${{ github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v') }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
+          outputs: type=image,push=true,rewrite-timestamp=true
           # BuildKit-level SLSA provenance + SBOM, attached to the image index.
           provenance: mode=max
           sbom: true
 
       # Keyless sigstore signing — one signature on the pushed digest covers
-      # every tag of this push. Gated like `push:` so it never runs unpushed.
-      - name: Install cosign
-        if: github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v')
-        uses: sigstore/cosign-installer@v4.1.2
+      # every tag of this push.
+      - uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
 
       - name: Sign image (keyless)
-        if: github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v')
         env:
           COSIGN_YES: "true"
-        run: cosign sign "${{ env.IMAGE }}@${{ steps.build.outputs.digest }}"
+          DIGEST: ${{ steps.build.outputs.digest }}
+        run: cosign sign "${IMAGE}@${DIGEST}"
 
       # GitHub-native provenance attestation (Attestations tab, `gh attestation
       # verify`), stored alongside the image in ghcr.
       - name: Attest build provenance
-        if: github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v')
-        uses: actions/attest-build-provenance@v4
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:
           subject-name: ${{ env.IMAGE }}
           subject-digest: ${{ steps.build.outputs.digest }}
