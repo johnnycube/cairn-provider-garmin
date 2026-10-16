@@ -15,10 +15,12 @@ dependencies = [
 [dependency-groups]
 dev = [
     "deptry",
+    "mutmut>=3.8.0",
     "mypy",
     "nkeys>=0.2.1",
     "pip-audit",
     "pip-licenses",
+    "pylint>=4.1.3",
     "pytest",
     "pytest-cov",
     "ruff",
@@ -82,3 +84,18 @@ skip_covered = true
 known_first_party = ["cairn_garmin", "cairn", "tests"]
 # Generated stubs; the connect clients are unused by the worker.
 extend_exclude = ["proto"]
+
+[tool.mutmut]
+# `make mutate`: weekly in CI, not part of check. main.py is signal wiring with no unit tests.
+source_paths = ["cairn_garmin/"]
+pytest_add_cli_args_test_selection = ["tests/"]
+do_not_mutate = ["cairn_garmin/main.py"]
+
+[tool.pylint.main]
+# Only the duplication check; ruff covers everything else (`make lint`).
+disable = ["all"]
+enable = ["duplicate-code"]
+
+[tool.pylint.similarities]
+min-similarity-lines = 8
+ignore-imports = true
