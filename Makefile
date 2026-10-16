@@ -15,12 +15,14 @@ LICENSES    ?= MIT;BSD;Apache;ISC;PSF;Python Software Foundation;Mozilla Public 
 # renovate: datasource=github-releases depName=gitleaks/gitleaks
 GITLEAKS_VERSION  ?= v8.30.1
 # renovate: datasource=go depName=github.com/fleetlint/fleetlint
-FLEETLINT_VERSION ?= v0.4.0
+FLEETLINT_VERSION ?= v0.5.1
+# Mutation score floor for cairn_garmin (mutmut; see [tool.mutmut] in pyproject.toml).
+MUTATION_MIN ?= 60
 # nats-server for the permission integration test; go install verifies it against sum.golang.org.
 # renovate: datasource=go depName=github.com/nats-io/nats-server/v2
 NATS_SERVER_VERSION ?= v2.15.1
 
-.PHONY: help tools fmt lint test cover audit bench build image dist check-fast check release clean
+.PHONY: help tools fmt lint test cover audit bench mutate build image dist check-fast check release clean
 
 help: ## list targets
 	@grep -E '^[a-z-]+:.*##' $(MAKEFILE_LIST) | awk -F':.*##' '{printf "  %-12s %s\n", $$1, $$2}'
@@ -34,10 +36,11 @@ fmt: ## format and autofix in place
 	$(UV) ruff format
 	$(UV) ruff check --fix
 
-lint: ## format check + ruff + mypy strict, warnings as errors
+lint: ## format check + ruff + mypy strict + duplication (pylint duplicate-code only), warnings as errors
 	$(UV) ruff format --check
 	$(UV) ruff check
 	$(UV) mypy
+	$(UV) pylint cairn_garmin tests
 
 test: ## all tests
 	$(UV) pytest
@@ -56,6 +59,12 @@ audit: ## vulnerabilities, licenses, unused/missing deps, lockfile, secrets
 
 bench: ## benchmarks (none yet; not part of check)
 	@echo "no benchmarks"
+
+mutate: ## mutation testing of cairn_garmin (weekly in CI, not part of check); fails below MUTATION_MIN % killed
+	rm -rf mutants
+	CAIRN_PROTO_PATH=$$PWD/proto $(UV) mutmut run
+	$(UV) mutmut export-cicd-stats
+	$(UV) python -c 'import json; s = json.load(open("mutants/mutmut-cicd-stats.json")); t = s["total"] - s["skipped"]; k = s["killed"] + s["timeout"]; p = 100 * k / t if t else 0; print(f"mutation score {p:.1f}% (minimum $(MUTATION_MIN)%)"); raise SystemExit(p < $(MUTATION_MIN))'
 
 build: ## byte-compile the worker, then build the image and smoke-test its imports
 	$(UV) python -m compileall -q cairn_garmin
@@ -86,5 +95,5 @@ release: ## refuse dirty/non-main -> check -> signed tag V (version and CHANGELO
 	@echo "tagged $(V) — push with: git push origin $(V)"
 
 clean: ## remove caches and coverage output
-	rm -rf .pytest_cache .ruff_cache .mypy_cache .coverage
+	rm -rf .pytest_cache .ruff_cache .mypy_cache .coverage mutants
 	find . -name __pycache__ -type d -prune -exec rm -rf {} +

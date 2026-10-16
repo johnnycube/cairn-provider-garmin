@@ -79,7 +79,7 @@ def test_archive_uploads_envelope(http: HTTP) -> None:
 def test_archive_is_best_effort(
     http: HTTP, reply: dict[str, Any] | Exception, responses: list[Resp | Exception]
 ) -> None:
-    http.responses = responses
+    http.responses = list(responses)  # the param list is shared between runs
     nc = FakeNC({archive.PRESIGN_SUBJECT: reply})
     assert asyncio.run(archive.archive(as_nats(nc), "u1", "42", {}, {})) == (None, 0)
 
@@ -100,7 +100,7 @@ def test_upload_result_returns_ref(http: HTTP) -> None:
     [({"error": "denied"}, []), (PRESIGN, [Resp(500)])],
 )
 def test_upload_result_raises(http: HTTP, reply: dict[str, Any], responses: list[Resp | Exception]) -> None:
-    http.responses = responses
+    http.responses = list(responses)  # the param list is shared between runs
     nc = FakeNC({archive.PRESIGN_SUBJECT: reply})
     with pytest.raises(RuntimeError):
         asyncio.run(archive.upload_result(as_nats(nc), b"{}"))
@@ -143,6 +143,6 @@ def test_fetch_failures(
     replies: dict[str, dict[str, Any] | Exception],
     responses: list[Resp | Exception],
 ) -> None:
-    http.responses = responses
+    http.responses = list(responses)  # the param list is shared between runs
     with pytest.raises((RuntimeError, TypeError)):
         asyncio.run(archive.fetch(as_nats(FakeNC(replies)), url, fallback))

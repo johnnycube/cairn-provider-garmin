@@ -6,6 +6,11 @@ to follow [Semantic Versioning](https://semver.org/). Dates are ISO-8601.
 
 ## [Unreleased]
 
+### Added
+- `make mutate`: mutmut mutation testing of `cairn_garmin` with a score floor, run weekly in CI.
+- `make lint` runs pylint's duplicate-code check (everything else stays with ruff).
+- Code of conduct (Contributor Covenant) and an ADR log under `docs/adr`.
+
 ## [0.3.1] — 2026-10-15
 
 ### Added
