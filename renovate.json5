@@ -1,4 +1,4 @@
-// Renovate configuration for github.com/johnnycube/cairn-provider-garmin
+// Renovate configuration for github.com/opencairn-org/cairn-provider-garmin
 // Docs: https://docs.renovatebot.com/configuration-options/
 // Validate locally: npx --yes renovate-config-validator renovate.json5
 {

@@ -3,7 +3,7 @@ name: Build & push garmin-worker image
 # Builds the Cairn Garmin worker image (Dockerfile) with BuildKit and pushes it
 # to the GitHub Container Registry tagged by git tag and commit hash.
 #
-# Registry: ghcr.io/johnnycube/cairn-provider-garmin
+# Registry: ghcr.io/opencairn-org/cairn-provider-garmin
 # Auth: the built-in GITHUB_TOKEN (packages: write) — no extra secret needed.
 #
 # Supply chain: pushed images carry BuildKit SLSA provenance + SBOM
@@ -12,10 +12,10 @@ name: Build & push garmin-worker image
 # attestation (verifiable via `gh attestation verify`). Layer and config
 # timestamps come from the commit (SOURCE_DATE_EPOCH) so rebuilds of a tag
 # match. Verify with:
-#   cosign verify ghcr.io/johnnycube/cairn-provider-garmin:<tag> \
+#   cosign verify ghcr.io/opencairn-org/cairn-provider-garmin:<tag> \
 #     --certificate-oidc-issuer https://token.actions.githubusercontent.com \
 #     --certificate-identity-regexp \
-#       '^https://github.com/johnnycube/cairn-provider-garmin/\.github/workflows/build\.yml@.*'
+#       '^https://github.com/opencairn-org/cairn-provider-garmin/\.github/workflows/build\.yml@.*'
 #
 # The generated proto stubs the worker imports (./proto) are committed, so no
 # buf step is needed. This repo has no dependency on cairn-core.
@@ -39,7 +39,7 @@ permissions:
 
 env:
   REGISTRY: ghcr.io
-  IMAGE: ghcr.io/johnnycube/cairn-provider-garmin
+  IMAGE: ghcr.io/opencairn-org/cairn-provider-garmin
 
 jobs:
   # Unprivileged gate: the full check passes, and a tag is on main.
