@@ -15,4 +15,5 @@ def manifest() -> dict[str, dict[str, bool | str]]:
         "Weight": {"read": True, "backfill": True, "granularity": "daily"},
         "Steps": {"read": True, "backfill": True, "granularity": "daily"},
         "RestingHR": {"read": True, "backfill": True, "granularity": "daily"},
+        "Gear": {"read": True, "backfill": True, "granularity": "per-account"},
     }

@@ -27,6 +27,8 @@ SUBJ_FETCH = f"cairn.jobs.fetch_source.{PROVIDER}"
 SUBJ_METRICS = f"cairn.jobs.import_metrics.{PROVIDER}"
 SUBJ_PARSE_BLOB = f"cairn.jobs.parse_blob.{PROVIDER}"
 SUBJ_RECONCILE = f"cairn.jobs.reconcile.{PROVIDER}"
+SUBJ_GEAR = f"cairn.jobs.import_gear.{PROVIDER}"
+RESULT_GEAR = f"cairn.results.import_gear.{PROVIDER}"
 # Reconcile results are account-suffixed so the server can attribute the
 # watermark: cairn.results.reconcile.garmin.<external_account_id>.
 RESULT_RECONCILE_PREFIX = f"cairn.results.reconcile.{PROVIDER}"
@@ -56,6 +58,13 @@ class Config:
     # Defaults to a per-user dir: the tokens are credentials, not for a shared /tmp.
     garth_home: str = field(
         default_factory=lambda: os.getenv("CAIRN_GARTH_HOME", os.path.expanduser("~/.cache/cairn-garth"))
+    )
+    # Per-activity gear costs one extra Garmin call per fetch; switch it off
+    # for accounts that hit Garmin's (undocumented) limits.
+    fetch_activity_gear: bool = field(
+        default_factory=lambda: (
+            os.getenv("CAIRN_GARMIN_FETCH_ACTIVITY_GEAR", "true").lower() not in ("0", "false", "no")
+        )
     )
 
 

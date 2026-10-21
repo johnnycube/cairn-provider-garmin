@@ -52,6 +52,26 @@ class GarminClient:
         # maxchart/maxpoly default to full resolution.
         return self._client().get_activity_details(activity_id)
 
+    # --- gear ---
+    def _profile_number(self) -> str:
+        api = self._client()
+        pid = api.profile_id or (api.get_user_profile() or {}).get("id")
+        if not pid:
+            raise RuntimeError("garmin profile id unavailable")
+        return str(pid)
+
+    def gear(self) -> list[JSON]:
+        """The account's gear list, retired included."""
+        return _as_list(self._client().get_gear(self._profile_number()))
+
+    def gear_defaults(self) -> list[JSON]:
+        """Per-activity-type default gear entries."""
+        return _as_list(self._client().get_gear_defaults(self._profile_number()))
+
+    def activity_gear(self, activity_id: str) -> list[JSON]:
+        """Gear recorded on one activity (usually zero or one item)."""
+        return _as_list(self._client().get_activity_gear(activity_id))
+
     # --- health metrics (daily) ---
     def hrv(self, day: str) -> JSON | None:
         return _safe(lambda: self._client().get_hrv_data(day))
@@ -111,6 +131,18 @@ def extract_daily_health(
     if wt and (v := _latest_weight_kg(wt)) is not None:
         out["Weight"] = v
     return out
+
+
+def _as_list(raw: object) -> list[JSON]:
+    """The gear endpoints are typed as dicts but return lists (or a dict wrapping one)."""
+    if isinstance(raw, list):
+        return [x for x in raw if isinstance(x, dict)]
+    if isinstance(raw, dict):
+        for v in raw.values():
+            if isinstance(v, list):
+                return [x for x in v if isinstance(x, dict)]
+        return [raw] if raw else []
+    return []
 
 
 def _dig(d: Any, path: list[str]) -> Any:

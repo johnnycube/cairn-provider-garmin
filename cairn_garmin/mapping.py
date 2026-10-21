@@ -9,6 +9,7 @@ from google.protobuf import duration_pb2, timestamp_pb2
 
 import cairn_garmin  # noqa: F401  (bootstraps the proto path)
 from cairn.v1 import activity_pb2 as a
+from cairn.v1 import gear_pb2 as g
 from cairn.worker.v1 import worker_service_pb2 as w
 
 JSON = dict[str, Any]
@@ -253,6 +254,75 @@ def _fill_columns(st: a.ActivityStream, cols: dict[str, list[Any]]) -> None:
         getattr(st, col).extend(cleaned)
         if col in _CHANNEL_ENUM:
             st.channels.append(_CHANNEL_ENUM[col])
+
+
+# --- gear --------------------------------------------------------------------
+#
+# gear-service records: uuid (stable id), gearTypeName (Bike/Shoes/Other),
+# gearStatusName (active/retired), displayName, customMakeModel,
+# gearMakeName/gearModelName, maximumMeters. Defaults come as per-activity-type
+# entries naming the gear uuid.
+
+_GEAR_KIND = {"bike": g.GEAR_KIND_BIKE, "bikes": g.GEAR_KIND_BIKE, "shoe": g.GEAR_KIND_SHOE, "shoes": g.GEAR_KIND_SHOE}
+
+
+def gear_name(rec: JSON) -> str:
+    name = rec.get("displayName") or rec.get("customMakeModel")
+    if not name:
+        name = " ".join(str(v) for v in (rec.get("gearMakeName"), rec.get("gearModelName")) if v)
+    return str(name or rec.get("uuid") or "")
+
+
+def gear_import(rec: JSON, default_for: list[a.ActivityType] | None = None) -> w.GearImport:
+    imp = w.GearImport(
+        kind=_GEAR_KIND.get(str(rec.get("gearTypeName") or "").lower(), g.GEAR_KIND_OTHER),
+        name=gear_name(rec),
+        brand=str(rec.get("gearMakeName") or ""),
+        model=str(rec.get("gearModelName") or ""),
+        description=str(rec.get("notes") or ""),
+        retired=str(rec.get("gearStatusName") or "").lower() == "retired",
+        primary=bool(default_for),
+    )
+    if (dist := _f(rec.get("totalDistance"))) is not None:
+        imp.distance_m = dist
+    imp.default_for.extend(default_for or [])
+    return imp
+
+
+def gear_event(
+    user_id: str, account_id: str, rec: JSON, default_for: list[a.ActivityType] | None = None
+) -> w.WorkerEvent:
+    ref = w.ExternalRef(
+        user_id=user_id, provider="garmin", external_account_id=account_id, external_id=str(rec.get("uuid") or "")
+    )
+    return w.WorkerEvent(
+        type=w.WORKER_EVENT_TYPE_GEAR, gear=w.ImportedGear(ref=ref, payload=gear_import(rec, default_for))
+    )
+
+
+def gear_default_types(defaults: list[JSON]) -> dict[str, list[a.ActivityType]]:
+    """gear uuid → the ActivityTypes it is the default for (unknown typeKeys dropped)."""
+    out: dict[str, list[a.ActivityType]] = {}
+    for d in defaults:
+        uuid = d.get("uuid") or d.get("gearUuid")
+        key = d.get("activityTypeKey")
+        if not key and isinstance(d.get("activityType"), dict):
+            key = d["activityType"].get("typeKey")
+        if not uuid or not key or d.get("defaultGear") is False:
+            continue
+        sport = _SPORT.get(str(key))
+        if sport and sport[0] not in out.setdefault(str(uuid), []):
+            out[str(uuid)].append(sport[0])
+    return out
+
+
+def apply_activity_gear(payload: a.ActivitySourcePayload, gear: list[JSON]) -> None:
+    """The first gear recorded on the activity becomes the payload's reference."""
+    for rec in gear:
+        if rec.get("uuid"):
+            payload.gear_external_id = str(rec["uuid"])
+            payload.gear_name = gear_name(rec)
+            return
 
 
 def metric_event(user_id: str, account_id: str, key: str, day_ms: int, value: float) -> w.WorkerEvent:

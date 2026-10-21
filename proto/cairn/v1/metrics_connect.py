@@ -7,8 +7,6 @@ from typing import Protocol
 
 from connectrpc.client import ConnectClient, ConnectClientSync
 from connectrpc.code import Code
-from connectrpc.codec import Codec
-from connectrpc.compression import Compression
 from connectrpc.errors import ConnectError
 from connectrpc.interceptor import Interceptor, InterceptorSync
 from connectrpc.method import IdempotencyLevel, MethodInfo
@@ -41,7 +39,7 @@ class MetricsService(Protocol):
 
 
 class MetricsServiceASGIApplication(ConnectASGIApplication[MetricsService]):
-    def __init__(self, service: MetricsService | AsyncGenerator[MetricsService], *, interceptors: Iterable[Interceptor]=(), read_max_bytes: int | None = None, compressions: Iterable[Compression] | None = None, codecs: Iterable[Codec] | None = None) -> None:
+    def __init__(self, service: MetricsService | AsyncGenerator[MetricsService], *, interceptors: Iterable[Interceptor]=(), read_max_bytes: int | None = None) -> None:
         super().__init__(
             service=service,
             endpoints=lambda svc: {
@@ -118,8 +116,6 @@ class MetricsServiceASGIApplication(ConnectASGIApplication[MetricsService]):
             },
             interceptors=interceptors,
             read_max_bytes=read_max_bytes,
-            compressions=compressions,
-            codecs=codecs,
         )
 
     @property
@@ -269,6 +265,8 @@ class MetricsServiceClient(ConnectClient):
             timeout_ms=timeout_ms,
         )
 
+
+
 class SettingsService(Protocol):
     async def get_settings(self, request: cairn_dot_v1_dot_metrics__pb2.GetSettingsRequest, ctx: RequestContext) -> cairn_dot_v1_dot_metrics__pb2.GetSettingsResponse:
         raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
@@ -281,7 +279,7 @@ class SettingsService(Protocol):
 
 
 class SettingsServiceASGIApplication(ConnectASGIApplication[SettingsService]):
-    def __init__(self, service: SettingsService | AsyncGenerator[SettingsService], *, interceptors: Iterable[Interceptor]=(), read_max_bytes: int | None = None, compressions: Iterable[Compression] | None = None, codecs: Iterable[Codec] | None = None) -> None:
+    def __init__(self, service: SettingsService | AsyncGenerator[SettingsService], *, interceptors: Iterable[Interceptor]=(), read_max_bytes: int | None = None) -> None:
         super().__init__(
             service=service,
             endpoints=lambda svc: {
@@ -318,8 +316,6 @@ class SettingsServiceASGIApplication(ConnectASGIApplication[SettingsService]):
             },
             interceptors=interceptors,
             read_max_bytes=read_max_bytes,
-            compressions=compressions,
-            codecs=codecs,
         )
 
     @property
@@ -390,9 +386,6 @@ class SettingsServiceClient(ConnectClient):
         )
 
 
-
-
-
 class MetricsServiceSync(Protocol):
     def list_metrics(self, request: cairn_dot_v1_dot_metrics__pb2.ListMetricsRequest, ctx: RequestContext) -> cairn_dot_v1_dot_metrics__pb2.ListMetricsResponse:
         raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
@@ -411,7 +404,7 @@ class MetricsServiceSync(Protocol):
 
 
 class MetricsServiceWSGIApplication(ConnectWSGIApplication):
-    def __init__(self, service: MetricsServiceSync, interceptors: Iterable[InterceptorSync]=(), read_max_bytes: int | None = None, compressions: Iterable[Compression] | None = None, codecs: Iterable[Codec] | None = None) -> None:
+    def __init__(self, service: MetricsServiceSync, interceptors: Iterable[InterceptorSync]=(), read_max_bytes: int | None = None) -> None:
         super().__init__(
             endpoints={
                 "/cairn.v1.MetricsService/ListMetrics": EndpointSync.unary(
@@ -487,8 +480,6 @@ class MetricsServiceWSGIApplication(ConnectWSGIApplication):
             },
             interceptors=interceptors,
             read_max_bytes=read_max_bytes,
-            compressions=compressions,
-            codecs=codecs,
         )
 
     @property
@@ -648,7 +639,7 @@ class SettingsServiceSync(Protocol):
 
 
 class SettingsServiceWSGIApplication(ConnectWSGIApplication):
-    def __init__(self, service: SettingsServiceSync, interceptors: Iterable[InterceptorSync]=(), read_max_bytes: int | None = None, compressions: Iterable[Compression] | None = None, codecs: Iterable[Codec] | None = None) -> None:
+    def __init__(self, service: SettingsServiceSync, interceptors: Iterable[InterceptorSync]=(), read_max_bytes: int | None = None) -> None:
         super().__init__(
             endpoints={
                 "/cairn.v1.SettingsService/GetSettings": EndpointSync.unary(
@@ -684,8 +675,6 @@ class SettingsServiceWSGIApplication(ConnectWSGIApplication):
             },
             interceptors=interceptors,
             read_max_bytes=read_max_bytes,
-            compressions=compressions,
-            codecs=codecs,
         )
 
     @property
@@ -754,5 +743,3 @@ class SettingsServiceClientSync(ConnectClientSync):
             headers=headers,
             timeout_ms=timeout_ms,
         )
-
-

@@ -7,8 +7,6 @@ from typing import Protocol
 
 from connectrpc.client import ConnectClient, ConnectClientSync
 from connectrpc.code import Code
-from connectrpc.codec import Codec
-from connectrpc.compression import Compression
 from connectrpc.errors import ConnectError
 from connectrpc.interceptor import Interceptor, InterceptorSync
 from connectrpc.method import IdempotencyLevel, MethodInfo
@@ -80,7 +78,7 @@ class AuthService(Protocol):
 
 
 class AuthServiceASGIApplication(ConnectASGIApplication[AuthService]):
-    def __init__(self, service: AuthService | AsyncGenerator[AuthService], *, interceptors: Iterable[Interceptor]=(), read_max_bytes: int | None = None, compressions: Iterable[Compression] | None = None, codecs: Iterable[Codec] | None = None) -> None:
+    def __init__(self, service: AuthService | AsyncGenerator[AuthService], *, interceptors: Iterable[Interceptor]=(), read_max_bytes: int | None = None) -> None:
         super().__init__(
             service=service,
             endpoints=lambda svc: {
@@ -287,8 +285,6 @@ class AuthServiceASGIApplication(ConnectASGIApplication[AuthService]):
             },
             interceptors=interceptors,
             read_max_bytes=read_max_bytes,
-            compressions=compressions,
-            codecs=codecs,
         )
 
     @property
@@ -698,6 +694,8 @@ class AuthServiceClient(ConnectClient):
             timeout_ms=timeout_ms,
         )
 
+
+
 class ExternalAccountService(Protocol):
     async def list_external_accounts(self, request: cairn_dot_v1_dot_auth__pb2.ListExternalAccountsRequest, ctx: RequestContext) -> cairn_dot_v1_dot_auth__pb2.ListExternalAccountsResponse:
         raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
@@ -728,7 +726,7 @@ class ExternalAccountService(Protocol):
 
 
 class ExternalAccountServiceASGIApplication(ConnectASGIApplication[ExternalAccountService]):
-    def __init__(self, service: ExternalAccountService | AsyncGenerator[ExternalAccountService], *, interceptors: Iterable[Interceptor]=(), read_max_bytes: int | None = None, compressions: Iterable[Compression] | None = None, codecs: Iterable[Codec] | None = None) -> None:
+    def __init__(self, service: ExternalAccountService | AsyncGenerator[ExternalAccountService], *, interceptors: Iterable[Interceptor]=(), read_max_bytes: int | None = None) -> None:
         super().__init__(
             service=service,
             endpoints=lambda svc: {
@@ -825,8 +823,6 @@ class ExternalAccountServiceASGIApplication(ConnectASGIApplication[ExternalAccou
             },
             interceptors=interceptors,
             read_max_bytes=read_max_bytes,
-            compressions=compressions,
-            codecs=codecs,
         )
 
     @property
@@ -1017,9 +1013,6 @@ class ExternalAccountServiceClient(ConnectClient):
         )
 
 
-
-
-
 class AuthServiceSync(Protocol):
     def get_login_methods(self, request: cairn_dot_v1_dot_auth__pb2.GetLoginMethodsRequest, ctx: RequestContext) -> cairn_dot_v1_dot_auth__pb2.GetLoginMethodsResponse:
         raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
@@ -1064,7 +1057,7 @@ class AuthServiceSync(Protocol):
 
 
 class AuthServiceWSGIApplication(ConnectWSGIApplication):
-    def __init__(self, service: AuthServiceSync, interceptors: Iterable[InterceptorSync]=(), read_max_bytes: int | None = None, compressions: Iterable[Compression] | None = None, codecs: Iterable[Codec] | None = None) -> None:
+    def __init__(self, service: AuthServiceSync, interceptors: Iterable[InterceptorSync]=(), read_max_bytes: int | None = None) -> None:
         super().__init__(
             endpoints={
                 "/cairn.v1.AuthService/GetLoginMethods": EndpointSync.unary(
@@ -1270,8 +1263,6 @@ class AuthServiceWSGIApplication(ConnectWSGIApplication):
             },
             interceptors=interceptors,
             read_max_bytes=read_max_bytes,
-            compressions=compressions,
-            codecs=codecs,
         )
 
     @property
@@ -1703,7 +1694,7 @@ class ExternalAccountServiceSync(Protocol):
 
 
 class ExternalAccountServiceWSGIApplication(ConnectWSGIApplication):
-    def __init__(self, service: ExternalAccountServiceSync, interceptors: Iterable[InterceptorSync]=(), read_max_bytes: int | None = None, compressions: Iterable[Compression] | None = None, codecs: Iterable[Codec] | None = None) -> None:
+    def __init__(self, service: ExternalAccountServiceSync, interceptors: Iterable[InterceptorSync]=(), read_max_bytes: int | None = None) -> None:
         super().__init__(
             endpoints={
                 "/cairn.v1.ExternalAccountService/ListExternalAccounts": EndpointSync.unary(
@@ -1799,8 +1790,6 @@ class ExternalAccountServiceWSGIApplication(ConnectWSGIApplication):
             },
             interceptors=interceptors,
             read_max_bytes=read_max_bytes,
-            compressions=compressions,
-            codecs=codecs,
         )
 
     @property
@@ -1989,5 +1978,3 @@ class ExternalAccountServiceClientSync(ConnectClientSync):
             headers=headers,
             timeout_ms=timeout_ms,
         )
-
-

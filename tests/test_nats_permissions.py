@@ -42,7 +42,10 @@ TOKEN, BAD_TOKEN = "enroll-garmin", "wrong"
 
 def standard_template(p: str, wk: str) -> tuple[list[str], list[str]]:
     """Mirror of cairn-core domain.StandardPermissionTemplate(p, wk); keep in sync."""
-    jobs = [f"cairn.jobs.{t}.{p}" for t in ("fetch_source", "parse_blob", "backfill", "reconcile", "import_metrics")]
+    jobs = [
+        f"cairn.jobs.{t}.{p}"
+        for t in ("fetch_source", "parse_blob", "backfill", "reconcile", "import_metrics", "import_gear")
+    ]
     webhook = f"cairn.webhooks.{wk}.event"
     js = ["$JS.API.STREAM.NAMES"]
     js += [f"$JS.API.CONSUMER.CREATE.{JOB_STREAM}.*.{f}" for f in jobs]
@@ -58,6 +61,7 @@ def standard_template(p: str, wk: str) -> tuple[list[str], list[str]]:
         f"cairn.results.backfill.{p}",
         f"cairn.results.reconcile.{p}.*",
         f"cairn.results.import_metrics.{p}",
+        f"cairn.results.import_gear.{p}",
         f"cairn.jobs.fetch_source.{p}",
         f"cairn.workers.{wk}.>",
         f"cairn.tokens.{p}.>",

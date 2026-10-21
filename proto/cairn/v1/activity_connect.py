@@ -7,8 +7,6 @@ from typing import Protocol
 
 from connectrpc.client import ConnectClient, ConnectClientSync
 from connectrpc.code import Code
-from connectrpc.codec import Codec
-from connectrpc.compression import Compression
 from connectrpc.errors import ConnectError
 from connectrpc.interceptor import Interceptor, InterceptorSync
 from connectrpc.method import IdempotencyLevel, MethodInfo
@@ -77,7 +75,7 @@ class ActivityService(Protocol):
 
 
 class ActivityServiceASGIApplication(ConnectASGIApplication[ActivityService]):
-    def __init__(self, service: ActivityService | AsyncGenerator[ActivityService], *, interceptors: Iterable[Interceptor]=(), read_max_bytes: int | None = None, compressions: Iterable[Compression] | None = None, codecs: Iterable[Codec] | None = None) -> None:
+    def __init__(self, service: ActivityService | AsyncGenerator[ActivityService], *, interceptors: Iterable[Interceptor]=(), read_max_bytes: int | None = None) -> None:
         super().__init__(
             service=service,
             endpoints=lambda svc: {
@@ -274,8 +272,6 @@ class ActivityServiceASGIApplication(ConnectASGIApplication[ActivityService]):
             },
             interceptors=interceptors,
             read_max_bytes=read_max_bytes,
-            compressions=compressions,
-            codecs=codecs,
         )
 
     @property
@@ -666,9 +662,6 @@ class ActivityServiceClient(ConnectClient):
         )
 
 
-
-
-
 class ActivityServiceSync(Protocol):
     def list_activities(self, request: cairn_dot_v1_dot_activity__pb2.ListActivitiesRequest, ctx: RequestContext) -> cairn_dot_v1_dot_activity__pb2.ListActivitiesResponse:
         raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
@@ -711,7 +704,7 @@ class ActivityServiceSync(Protocol):
 
 
 class ActivityServiceWSGIApplication(ConnectWSGIApplication):
-    def __init__(self, service: ActivityServiceSync, interceptors: Iterable[InterceptorSync]=(), read_max_bytes: int | None = None, compressions: Iterable[Compression] | None = None, codecs: Iterable[Codec] | None = None) -> None:
+    def __init__(self, service: ActivityServiceSync, interceptors: Iterable[InterceptorSync]=(), read_max_bytes: int | None = None) -> None:
         super().__init__(
             endpoints={
                 "/cairn.v1.ActivityService/ListActivities": EndpointSync.unary(
@@ -907,8 +900,6 @@ class ActivityServiceWSGIApplication(ConnectWSGIApplication):
             },
             interceptors=interceptors,
             read_max_bytes=read_max_bytes,
-            compressions=compressions,
-            codecs=codecs,
         )
 
     @property
@@ -1297,5 +1288,3 @@ class ActivityServiceClientSync(ConnectClientSync):
             headers=headers,
             timeout_ms=timeout_ms,
         )
-
-

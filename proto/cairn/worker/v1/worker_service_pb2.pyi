@@ -3,6 +3,7 @@ import datetime
 from google.protobuf import duration_pb2 as _duration_pb2
 from google.protobuf import timestamp_pb2 as _timestamp_pb2
 from cairn.v1 import activity_pb2 as _activity_pb2
+from cairn.v1 import gear_pb2 as _gear_pb2
 from cairn.v1 import segment_pb2 as _segment_pb2
 from google.protobuf.internal import containers as _containers
 from google.protobuf.internal import enum_type_wrapper as _enum_type_wrapper
@@ -21,6 +22,7 @@ class WorkerEventType(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
     WORKER_EVENT_TYPE_SEGMENT_EFFORT: _ClassVar[WorkerEventType]
     WORKER_EVENT_TYPE_RECORD: _ClassVar[WorkerEventType]
     WORKER_EVENT_TYPE_METRIC: _ClassVar[WorkerEventType]
+    WORKER_EVENT_TYPE_GEAR: _ClassVar[WorkerEventType]
 
 class AuthMethod(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
     __slots__ = ()
@@ -56,6 +58,7 @@ class JobType(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
     JOB_TYPE_UNREGISTER_WEBHOOK: _ClassVar[JobType]
     JOB_TYPE_VALIDATE_CREDENTIALS: _ClassVar[JobType]
     JOB_TYPE_REFRESH_OAUTH_TOKEN: _ClassVar[JobType]
+    JOB_TYPE_IMPORT_GEAR: _ClassVar[JobType]
 
 class ReportInstruction(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
     __slots__ = ()
@@ -99,6 +102,7 @@ WORKER_EVENT_TYPE_SEGMENT: WorkerEventType
 WORKER_EVENT_TYPE_SEGMENT_EFFORT: WorkerEventType
 WORKER_EVENT_TYPE_RECORD: WorkerEventType
 WORKER_EVENT_TYPE_METRIC: WorkerEventType
+WORKER_EVENT_TYPE_GEAR: WorkerEventType
 AUTH_METHOD_UNSPECIFIED: AuthMethod
 AUTH_METHOD_NONE: AuthMethod
 AUTH_METHOD_OAUTH2: AuthMethod
@@ -125,6 +129,7 @@ JOB_TYPE_REGISTER_WEBHOOK: JobType
 JOB_TYPE_UNREGISTER_WEBHOOK: JobType
 JOB_TYPE_VALIDATE_CREDENTIALS: JobType
 JOB_TYPE_REFRESH_OAUTH_TOKEN: JobType
+JOB_TYPE_IMPORT_GEAR: JobType
 REPORT_INSTRUCTION_UNSPECIFIED: ReportInstruction
 REPORT_INSTRUCTION_NONE: ReportInstruction
 REPORT_INSTRUCTION_ACK: ReportInstruction
@@ -324,7 +329,7 @@ class WorkerHealth(_message.Message):
     def __init__(self, active_jobs: _Optional[int] = ..., available_capacity: _Optional[int] = ..., metrics: _Optional[_Mapping[str, float]] = ...) -> None: ...
 
 class Job(_message.Message):
-    __slots__ = ("id", "type", "provider", "user_id", "external_account_id", "credentials", "import_activities", "reimport_activity", "local_reparse", "import_segments", "import_metrics", "register_webhook", "unregister_webhook", "scheduled_at", "deadline", "attempt", "dry_run")
+    __slots__ = ("id", "type", "provider", "user_id", "external_account_id", "credentials", "import_activities", "reimport_activity", "local_reparse", "import_segments", "import_metrics", "register_webhook", "unregister_webhook", "import_gear", "scheduled_at", "deadline", "attempt", "dry_run")
     ID_FIELD_NUMBER: _ClassVar[int]
     TYPE_FIELD_NUMBER: _ClassVar[int]
     PROVIDER_FIELD_NUMBER: _ClassVar[int]
@@ -338,6 +343,7 @@ class Job(_message.Message):
     IMPORT_METRICS_FIELD_NUMBER: _ClassVar[int]
     REGISTER_WEBHOOK_FIELD_NUMBER: _ClassVar[int]
     UNREGISTER_WEBHOOK_FIELD_NUMBER: _ClassVar[int]
+    IMPORT_GEAR_FIELD_NUMBER: _ClassVar[int]
     SCHEDULED_AT_FIELD_NUMBER: _ClassVar[int]
     DEADLINE_FIELD_NUMBER: _ClassVar[int]
     ATTEMPT_FIELD_NUMBER: _ClassVar[int]
@@ -355,11 +361,12 @@ class Job(_message.Message):
     import_metrics: ImportMetricsPayload
     register_webhook: RegisterWebhookPayload
     unregister_webhook: UnregisterWebhookPayload
+    import_gear: ImportGearPayload
     scheduled_at: _timestamp_pb2.Timestamp
     deadline: _timestamp_pb2.Timestamp
     attempt: int
     dry_run: bool
-    def __init__(self, id: _Optional[str] = ..., type: _Optional[_Union[JobType, str]] = ..., provider: _Optional[str] = ..., user_id: _Optional[str] = ..., external_account_id: _Optional[str] = ..., credentials: _Optional[_Union[EphemeralCredentials, _Mapping]] = ..., import_activities: _Optional[_Union[ImportActivitiesPayload, _Mapping]] = ..., reimport_activity: _Optional[_Union[ReimportActivityPayload, _Mapping]] = ..., local_reparse: _Optional[_Union[LocalReparsePayload, _Mapping]] = ..., import_segments: _Optional[_Union[ImportSegmentsPayload, _Mapping]] = ..., import_metrics: _Optional[_Union[ImportMetricsPayload, _Mapping]] = ..., register_webhook: _Optional[_Union[RegisterWebhookPayload, _Mapping]] = ..., unregister_webhook: _Optional[_Union[UnregisterWebhookPayload, _Mapping]] = ..., scheduled_at: _Optional[_Union[datetime.datetime, _timestamp_pb2.Timestamp, _Mapping]] = ..., deadline: _Optional[_Union[datetime.datetime, _timestamp_pb2.Timestamp, _Mapping]] = ..., attempt: _Optional[int] = ..., dry_run: _Optional[bool] = ...) -> None: ...
+    def __init__(self, id: _Optional[str] = ..., type: _Optional[_Union[JobType, str]] = ..., provider: _Optional[str] = ..., user_id: _Optional[str] = ..., external_account_id: _Optional[str] = ..., credentials: _Optional[_Union[EphemeralCredentials, _Mapping]] = ..., import_activities: _Optional[_Union[ImportActivitiesPayload, _Mapping]] = ..., reimport_activity: _Optional[_Union[ReimportActivityPayload, _Mapping]] = ..., local_reparse: _Optional[_Union[LocalReparsePayload, _Mapping]] = ..., import_segments: _Optional[_Union[ImportSegmentsPayload, _Mapping]] = ..., import_metrics: _Optional[_Union[ImportMetricsPayload, _Mapping]] = ..., register_webhook: _Optional[_Union[RegisterWebhookPayload, _Mapping]] = ..., unregister_webhook: _Optional[_Union[UnregisterWebhookPayload, _Mapping]] = ..., import_gear: _Optional[_Union[ImportGearPayload, _Mapping]] = ..., scheduled_at: _Optional[_Union[datetime.datetime, _timestamp_pb2.Timestamp, _Mapping]] = ..., deadline: _Optional[_Union[datetime.datetime, _timestamp_pb2.Timestamp, _Mapping]] = ..., attempt: _Optional[int] = ..., dry_run: _Optional[bool] = ...) -> None: ...
 
 class JobAck(_message.Message):
     __slots__ = ("initial_capacity", "received_job_ids", "rejected_job_ids", "capacity_increment")
@@ -590,6 +597,10 @@ class ImportMetricsPayload(_message.Message):
     metric_keys: _containers.RepeatedScalarFieldContainer[str]
     def __init__(self, since: _Optional[_Union[datetime.datetime, _timestamp_pb2.Timestamp, _Mapping]] = ..., metric_keys: _Optional[_Iterable[str]] = ...) -> None: ...
 
+class ImportGearPayload(_message.Message):
+    __slots__ = ()
+    def __init__(self) -> None: ...
+
 class ExternalRef(_message.Message):
     __slots__ = ("user_id", "provider", "external_account_id", "external_id")
     USER_ID_FIELD_NUMBER: _ClassVar[int]
@@ -637,20 +648,22 @@ class PayloadRef(_message.Message):
     def __init__(self, blob_id: _Optional[str] = ..., size_bytes: _Optional[int] = ..., content_type: _Optional[str] = ..., content_sha256: _Optional[str] = ...) -> None: ...
 
 class WorkerEvent(_message.Message):
-    __slots__ = ("type", "activity", "segment", "segment_effort", "record", "metric")
+    __slots__ = ("type", "activity", "segment", "segment_effort", "record", "metric", "gear")
     TYPE_FIELD_NUMBER: _ClassVar[int]
     ACTIVITY_FIELD_NUMBER: _ClassVar[int]
     SEGMENT_FIELD_NUMBER: _ClassVar[int]
     SEGMENT_EFFORT_FIELD_NUMBER: _ClassVar[int]
     RECORD_FIELD_NUMBER: _ClassVar[int]
     METRIC_FIELD_NUMBER: _ClassVar[int]
+    GEAR_FIELD_NUMBER: _ClassVar[int]
     type: WorkerEventType
     activity: ImportedActivity
     segment: ImportedSegment
     segment_effort: ImportedSegmentEffort
     record: ImportedRecord
     metric: ImportedMetric
-    def __init__(self, type: _Optional[_Union[WorkerEventType, str]] = ..., activity: _Optional[_Union[ImportedActivity, _Mapping]] = ..., segment: _Optional[_Union[ImportedSegment, _Mapping]] = ..., segment_effort: _Optional[_Union[ImportedSegmentEffort, _Mapping]] = ..., record: _Optional[_Union[ImportedRecord, _Mapping]] = ..., metric: _Optional[_Union[ImportedMetric, _Mapping]] = ...) -> None: ...
+    gear: ImportedGear
+    def __init__(self, type: _Optional[_Union[WorkerEventType, str]] = ..., activity: _Optional[_Union[ImportedActivity, _Mapping]] = ..., segment: _Optional[_Union[ImportedSegment, _Mapping]] = ..., segment_effort: _Optional[_Union[ImportedSegmentEffort, _Mapping]] = ..., record: _Optional[_Union[ImportedRecord, _Mapping]] = ..., metric: _Optional[_Union[ImportedMetric, _Mapping]] = ..., gear: _Optional[_Union[ImportedGear, _Mapping]] = ...) -> None: ...
 
 class ImportedActivity(_message.Message):
     __slots__ = ("ref", "raw_blob_id", "payload", "stream", "attachments", "raw_content_type", "raw_size_bytes")
@@ -795,6 +808,36 @@ class ImportedMetric(_message.Message):
     value_numeric: float
     value_json: str
     def __init__(self, ref: _Optional[_Union[ExternalRef, _Mapping]] = ..., key: _Optional[str] = ..., ts: _Optional[_Union[datetime.datetime, _timestamp_pb2.Timestamp, _Mapping]] = ..., value_numeric: _Optional[float] = ..., value_json: _Optional[str] = ...) -> None: ...
+
+class ImportedGear(_message.Message):
+    __slots__ = ("ref", "payload")
+    REF_FIELD_NUMBER: _ClassVar[int]
+    PAYLOAD_FIELD_NUMBER: _ClassVar[int]
+    ref: ExternalRef
+    payload: GearImport
+    def __init__(self, ref: _Optional[_Union[ExternalRef, _Mapping]] = ..., payload: _Optional[_Union[GearImport, _Mapping]] = ...) -> None: ...
+
+class GearImport(_message.Message):
+    __slots__ = ("kind", "name", "brand", "model", "description", "retired", "primary", "distance_m", "default_for")
+    KIND_FIELD_NUMBER: _ClassVar[int]
+    NAME_FIELD_NUMBER: _ClassVar[int]
+    BRAND_FIELD_NUMBER: _ClassVar[int]
+    MODEL_FIELD_NUMBER: _ClassVar[int]
+    DESCRIPTION_FIELD_NUMBER: _ClassVar[int]
+    RETIRED_FIELD_NUMBER: _ClassVar[int]
+    PRIMARY_FIELD_NUMBER: _ClassVar[int]
+    DISTANCE_M_FIELD_NUMBER: _ClassVar[int]
+    DEFAULT_FOR_FIELD_NUMBER: _ClassVar[int]
+    kind: _gear_pb2.GearKind
+    name: str
+    brand: str
+    model: str
+    description: str
+    retired: bool
+    primary: bool
+    distance_m: float
+    default_for: _containers.RepeatedScalarFieldContainer[_activity_pb2.ActivityType]
+    def __init__(self, kind: _Optional[_Union[_gear_pb2.GearKind, str]] = ..., name: _Optional[str] = ..., brand: _Optional[str] = ..., model: _Optional[str] = ..., description: _Optional[str] = ..., retired: _Optional[bool] = ..., primary: _Optional[bool] = ..., distance_m: _Optional[float] = ..., default_for: _Optional[_Iterable[_Union[_activity_pb2.ActivityType, str]]] = ...) -> None: ...
 
 class RegisterWebhookPayload(_message.Message):
     __slots__ = ("callback_url", "event_types")

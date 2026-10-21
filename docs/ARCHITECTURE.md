@@ -12,7 +12,7 @@ the server presigns. The handlers and settings are listed in the
 - **`cairn_garmin/runtime.py`** — the `Worker`: NATS connection, presence
   heartbeat, the `discover` request/reply handler and one JetStream pull
   consumer per job subject (`fetch_source`, `import_metrics`, `parse_blob`,
-  `reconcile`). It owns retries, ack extension and failure envelopes.
+  `reconcile`, `import_gear`). It owns retries, ack extension and failure envelopes.
 - **`cairn_garmin/garmin_client.py`** — a thin wrapper over `garminconnect`
   with a per-account token store and the pure health-metric extraction.
 - **`cairn_garmin/mapping.py`** — pure functions from Garmin JSON to the

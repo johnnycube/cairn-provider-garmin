@@ -6,6 +6,23 @@ to follow [Semantic Versioning](https://semver.org/). Dates are ISO-8601.
 
 ## [Unreleased]
 
+## [0.4.0] — 2026-10-21
+
+Needs cairn-core 0.4.0 or later (gear events and the `import_gear` job are
+new in the contract; the Core must be upgraded first).
+
+### Added
+- Gear. The `import_gear` job answers with the account's gear list, retired
+  included, with brand, model and Garmin's per-activity-type defaults, as
+  GEAR events; `fetch_source` looks up the gear recorded on each activity
+  (`get_activity_gear`, one extra call, off with
+  `CAIRN_GARMIN_FETCH_ACTIVITY_GEAR=false`) and carries it on the payload,
+  preceded by the GEAR event. Already imported activities need a reimport to
+  pick up gear. The manifest now declares `Gear` with backfill.
+
+### Changed
+- Proto stubs regenerated from the cairn-core 0.4.0 contract.
+
 ## [0.3.2] — 2026-10-19
 
 ### Added
