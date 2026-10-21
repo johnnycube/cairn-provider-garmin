@@ -7,8 +7,6 @@ from typing import Protocol
 
 from connectrpc.client import ConnectClient, ConnectClientSync
 from connectrpc.code import Code
-from connectrpc.codec import Codec
-from connectrpc.compression import Compression
 from connectrpc.errors import ConnectError
 from connectrpc.interceptor import Interceptor, InterceptorSync
 from connectrpc.method import IdempotencyLevel, MethodInfo
@@ -74,7 +72,7 @@ class NotificationService(Protocol):
 
 
 class NotificationServiceASGIApplication(ConnectASGIApplication[NotificationService]):
-    def __init__(self, service: NotificationService | AsyncGenerator[NotificationService], *, interceptors: Iterable[Interceptor]=(), read_max_bytes: int | None = None, compressions: Iterable[Compression] | None = None, codecs: Iterable[Codec] | None = None) -> None:
+    def __init__(self, service: NotificationService | AsyncGenerator[NotificationService], *, interceptors: Iterable[Interceptor]=(), read_max_bytes: int | None = None) -> None:
         super().__init__(
             service=service,
             endpoints=lambda svc: {
@@ -261,8 +259,6 @@ class NotificationServiceASGIApplication(ConnectASGIApplication[NotificationServ
             },
             interceptors=interceptors,
             read_max_bytes=read_max_bytes,
-            compressions=compressions,
-            codecs=codecs,
         )
 
     @property
@@ -633,9 +629,6 @@ class NotificationServiceClient(ConnectClient):
         )
 
 
-
-
-
 class NotificationServiceSync(Protocol):
     def stream_notifications(self, request: cairn_dot_v1_dot_notification__pb2.StreamNotificationsRequest, ctx: RequestContext) -> Iterator[cairn_dot_v1_dot_notification__pb2.NotificationEvent]:
         raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
@@ -676,7 +669,7 @@ class NotificationServiceSync(Protocol):
 
 
 class NotificationServiceWSGIApplication(ConnectWSGIApplication):
-    def __init__(self, service: NotificationServiceSync, interceptors: Iterable[InterceptorSync]=(), read_max_bytes: int | None = None, compressions: Iterable[Compression] | None = None, codecs: Iterable[Codec] | None = None) -> None:
+    def __init__(self, service: NotificationServiceSync, interceptors: Iterable[InterceptorSync]=(), read_max_bytes: int | None = None) -> None:
         super().__init__(
             endpoints={
                 "/cairn.v1.NotificationService/StreamNotifications": EndpointSync.server_stream(
@@ -862,8 +855,6 @@ class NotificationServiceWSGIApplication(ConnectWSGIApplication):
             },
             interceptors=interceptors,
             read_max_bytes=read_max_bytes,
-            compressions=compressions,
-            codecs=codecs,
         )
 
     @property
@@ -1232,5 +1223,3 @@ class NotificationServiceClientSync(ConnectClientSync):
             headers=headers,
             timeout_ms=timeout_ms,
         )
-
-

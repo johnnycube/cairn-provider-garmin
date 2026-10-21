@@ -7,8 +7,6 @@ from typing import Protocol
 
 from connectrpc.client import ConnectClient, ConnectClientSync
 from connectrpc.code import Code
-from connectrpc.codec import Codec
-from connectrpc.compression import Compression
 from connectrpc.errors import ConnectError
 from connectrpc.interceptor import Interceptor, InterceptorSync
 from connectrpc.method import IdempotencyLevel, MethodInfo
@@ -110,7 +108,7 @@ class AdminService(Protocol):
 
 
 class AdminServiceASGIApplication(ConnectASGIApplication[AdminService]):
-    def __init__(self, service: AdminService | AsyncGenerator[AdminService], *, interceptors: Iterable[Interceptor]=(), read_max_bytes: int | None = None, compressions: Iterable[Compression] | None = None, codecs: Iterable[Codec] | None = None) -> None:
+    def __init__(self, service: AdminService | AsyncGenerator[AdminService], *, interceptors: Iterable[Interceptor]=(), read_max_bytes: int | None = None) -> None:
         super().__init__(
             service=service,
             endpoints=lambda svc: {
@@ -417,8 +415,6 @@ class AdminServiceASGIApplication(ConnectASGIApplication[AdminService]):
             },
             interceptors=interceptors,
             read_max_bytes=read_max_bytes,
-            compressions=compressions,
-            codecs=codecs,
         )
 
     @property
@@ -1029,9 +1025,6 @@ class AdminServiceClient(ConnectClient):
         )
 
 
-
-
-
 class AdminServiceSync(Protocol):
     def list_o_i_d_c_clients(self, request: cairn_dot_v1_dot_admin__pb2.ListOIDCClientsRequest, ctx: RequestContext) -> cairn_dot_v1_dot_admin__pb2.ListOIDCClientsResponse:
         raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
@@ -1096,7 +1089,7 @@ class AdminServiceSync(Protocol):
 
 
 class AdminServiceWSGIApplication(ConnectWSGIApplication):
-    def __init__(self, service: AdminServiceSync, interceptors: Iterable[InterceptorSync]=(), read_max_bytes: int | None = None, compressions: Iterable[Compression] | None = None, codecs: Iterable[Codec] | None = None) -> None:
+    def __init__(self, service: AdminServiceSync, interceptors: Iterable[InterceptorSync]=(), read_max_bytes: int | None = None) -> None:
         super().__init__(
             endpoints={
                 "/cairn.v1.AdminService/ListOIDCClients": EndpointSync.unary(
@@ -1402,8 +1395,6 @@ class AdminServiceWSGIApplication(ConnectWSGIApplication):
             },
             interceptors=interceptors,
             read_max_bytes=read_max_bytes,
-            compressions=compressions,
-            codecs=codecs,
         )
 
     @property
@@ -2012,5 +2003,3 @@ class AdminServiceClientSync(ConnectClientSync):
             headers=headers,
             timeout_ms=timeout_ms,
         )
-
-

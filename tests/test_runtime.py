@@ -9,6 +9,8 @@ import pytest
 from google.protobuf import json_format
 
 import cairn_garmin  # noqa: F401 (proto path bootstrap)
+from cairn.v1 import activity_pb2 as a
+from cairn.v1 import gear_pb2 as g
 from cairn.worker.v1 import worker_service_pb2 as w
 from cairn_garmin import archive, runtime
 from cairn_garmin import config as C
@@ -42,6 +44,33 @@ class FakeClient:
     def daily_health(self, day: str) -> dict[str, float]:
         self.days.append(day)
         return {"Steps": 100.0}
+
+    # gear-service shapes (anonymised)
+    def activity_gear(self, ext_id: str) -> list[dict[str, Any]]:
+        return [GEAR_BIKE]
+
+    def gear(self) -> list[dict[str, Any]]:
+        return [GEAR_BIKE, GEAR_SHOES]
+
+    def gear_defaults(self) -> list[dict[str, Any]]:
+        return [{"uuid": GEAR_SHOES["uuid"], "activityTypeKey": "running", "defaultGear": True}]
+
+
+GEAR_BIKE: dict[str, Any] = {
+    "uuid": "aaaa-1",
+    "gearTypeName": "Bike",
+    "gearStatusName": "active",
+    "displayName": "Canyon",
+    "gearMakeName": "Canyon",
+    "gearModelName": "Grail",
+    "totalDistance": 1500.5,
+}
+GEAR_SHOES: dict[str, Any] = {
+    "uuid": "bbbb-2",
+    "gearTypeName": "Shoes",
+    "gearStatusName": "retired",
+    "customMakeModel": "Pegasus",
+}
 
 
 class Responder:
@@ -124,10 +153,74 @@ def test_fetch_source_publishes_activity_with_stream(uploads: list[bytes]) -> No
     (env,) = results(js, C.RESULT_SUBJECT)
     assert env.payload_ref.blob_id == "transfer/1"
     full = json_format.Parse(uploads[0], w.JobResult())
-    act = full.events[0].activity
+    act = full.events[-1].activity  # the GEAR event precedes it
     assert act.ref.external_id == "7"
     assert act.raw_blob_id == "raw/7.json"
     assert list(act.stream.distance_m) == [0.0, 3.0]
+
+
+def test_fetch_source_carries_gear(uploads: list[bytes]) -> None:
+    wk, _ = make_worker(FakeClient())
+    job = {"account_id": "acc-1", "user_id": "u1", "ext_id": "7"}
+    asyncio.run(wk._handle_fetch_source(json.dumps(job).encode()))
+    events = json_format.Parse(uploads[0], w.JobResult()).events
+    assert [e.type for e in events] == [w.WORKER_EVENT_TYPE_GEAR, w.WORKER_EVENT_TYPE_ACTIVITY]
+    gear = events[0].gear
+    assert gear.ref.external_id == "aaaa-1"
+    assert gear.ref.external_account_id == "acc-1"
+    assert gear.payload.kind == g.GEAR_KIND_BIKE
+    assert gear.payload.name == "Canyon"
+    assert events[1].activity.payload.gear_external_id == "aaaa-1"
+    assert events[1].activity.payload.gear_name == "Canyon"
+
+
+def test_fetch_source_gear_is_optional(uploads: list[bytes]) -> None:
+    class Broken(FakeClient):
+        def activity_gear(self, ext_id: str) -> list[dict[str, Any]]:
+            raise RuntimeError("garmin 429")
+
+    wk, _ = make_worker(Broken())
+    asyncio.run(wk._handle_fetch_source(json.dumps({"account_id": "acc-1", "ext_id": "7"}).encode()))
+    events = json_format.Parse(uploads[0], w.JobResult()).events
+    assert [e.type for e in events] == [w.WORKER_EVENT_TYPE_ACTIVITY]
+    assert events[0].activity.payload.gear_external_id == ""
+
+
+def test_fetch_source_gear_lookup_can_be_disabled(uploads: list[bytes]) -> None:
+    cfg = C.Config(garmin_email="", garmin_password="", garth_home="/nonexistent", fetch_activity_gear=False)
+    wk, _ = make_worker(FakeClient(), cfg=cfg)
+    asyncio.run(wk._handle_fetch_source(json.dumps({"account_id": "acc-1", "ext_id": "7"}).encode()))
+    events = json_format.Parse(uploads[0], w.JobResult()).events
+    assert len(events) == 1
+    assert events[0].activity.payload.gear_external_id == ""
+
+
+def test_import_gear_publishes_list_with_defaults(uploads: list[bytes]) -> None:
+    wk, js = make_worker(FakeClient())
+    asyncio.run(wk._handle_import_gear(json.dumps({"account_id": "acc-1", "user_id": "u1"}).encode()))
+    assert js.published[-1][0] == C.RESULT_GEAR
+    events = json_format.Parse(uploads[0], w.JobResult()).events
+    by_id = {e.gear.ref.external_id: e.gear.payload for e in events}
+    assert set(by_id) == {"aaaa-1", "bbbb-2"}
+    assert by_id["aaaa-1"].brand == "Canyon"
+    assert by_id["aaaa-1"].model == "Grail"
+    assert by_id["aaaa-1"].distance_m == 1500.5
+    shoes = by_id["bbbb-2"]
+    assert shoes.kind == g.GEAR_KIND_SHOE
+    assert shoes.retired
+    assert shoes.name == "Pegasus"
+    assert list(shoes.default_for) == [a.ACTIVITY_TYPE_RUN]
+    assert shoes.primary
+
+
+def test_import_gear_without_gear_publishes_nothing() -> None:
+    class Empty(FakeClient):
+        def gear(self) -> list[dict[str, Any]]:
+            return []
+
+    wk, js = make_worker(Empty())
+    asyncio.run(wk._handle_import_gear(json.dumps({"account_id": "acc-1"}).encode()))
+    assert js.published == []
 
 
 def test_fetch_source_requires_ext_id() -> None:

@@ -12,6 +12,12 @@ from typing import ClassVar as _ClassVar, Optional as _Optional, Union as _Union
 
 DESCRIPTOR: _descriptor.FileDescriptor
 
+class GearSetBy(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
+    __slots__ = ()
+    GEAR_SET_BY_UNSPECIFIED: _ClassVar[GearSetBy]
+    GEAR_SET_BY_MERGE: _ClassVar[GearSetBy]
+    GEAR_SET_BY_USER: _ClassVar[GearSetBy]
+
 class ActivityType(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
     __slots__ = ()
     ACTIVITY_TYPE_UNSPECIFIED: _ClassVar[ActivityType]
@@ -141,6 +147,9 @@ class ActivityEventType(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
     ACTIVITY_EVENT_TYPE_REIMPORT_FAILED: _ClassVar[ActivityEventType]
     ACTIVITY_EVENT_TYPE_NEW_PR: _ClassVar[ActivityEventType]
     ACTIVITY_EVENT_TYPE_SEGMENT_PR: _ClassVar[ActivityEventType]
+GEAR_SET_BY_UNSPECIFIED: GearSetBy
+GEAR_SET_BY_MERGE: GearSetBy
+GEAR_SET_BY_USER: GearSetBy
 ACTIVITY_TYPE_UNSPECIFIED: ActivityType
 ACTIVITY_TYPE_RIDE: ActivityType
 ACTIVITY_TYPE_RUN: ActivityType
@@ -243,7 +252,7 @@ ACTIVITY_EVENT_TYPE_NEW_PR: ActivityEventType
 ACTIVITY_EVENT_TYPE_SEGMENT_PR: ActivityEventType
 
 class Activity(_message.Message):
-    __slots__ = ("id", "user_id", "type", "discipline", "is_virtual", "is_ebike", "is_commute", "is_race", "custom_subtype", "title", "description", "start_time", "end_time", "elapsed_duration", "moving_duration", "timezone", "summary", "sources", "primary_stream_source_id", "merge_provenance", "merged_at", "created_at", "updated_at", "tags", "gear_id", "privacy", "deleted_at", "start_place", "start_lat", "start_lng")
+    __slots__ = ("id", "user_id", "type", "discipline", "is_virtual", "is_ebike", "is_commute", "is_race", "custom_subtype", "title", "description", "start_time", "end_time", "elapsed_duration", "moving_duration", "timezone", "summary", "sources", "primary_stream_source_id", "merge_provenance", "merged_at", "created_at", "updated_at", "tags", "gear_id", "privacy", "deleted_at", "start_place", "start_lat", "start_lng", "gear_set_by", "gear_name")
     class MergeProvenanceEntry(_message.Message):
         __slots__ = ("key", "value")
         KEY_FIELD_NUMBER: _ClassVar[int]
@@ -281,6 +290,8 @@ class Activity(_message.Message):
     START_PLACE_FIELD_NUMBER: _ClassVar[int]
     START_LAT_FIELD_NUMBER: _ClassVar[int]
     START_LNG_FIELD_NUMBER: _ClassVar[int]
+    GEAR_SET_BY_FIELD_NUMBER: _ClassVar[int]
+    GEAR_NAME_FIELD_NUMBER: _ClassVar[int]
     id: str
     user_id: str
     type: ActivityType
@@ -311,7 +322,9 @@ class Activity(_message.Message):
     start_place: str
     start_lat: float
     start_lng: float
-    def __init__(self, id: _Optional[str] = ..., user_id: _Optional[str] = ..., type: _Optional[_Union[ActivityType, str]] = ..., discipline: _Optional[_Union[Discipline, str]] = ..., is_virtual: _Optional[bool] = ..., is_ebike: _Optional[bool] = ..., is_commute: _Optional[bool] = ..., is_race: _Optional[bool] = ..., custom_subtype: _Optional[str] = ..., title: _Optional[str] = ..., description: _Optional[str] = ..., start_time: _Optional[_Union[datetime.datetime, _timestamp_pb2.Timestamp, _Mapping]] = ..., end_time: _Optional[_Union[datetime.datetime, _timestamp_pb2.Timestamp, _Mapping]] = ..., elapsed_duration: _Optional[_Union[datetime.timedelta, _duration_pb2.Duration, _Mapping]] = ..., moving_duration: _Optional[_Union[datetime.timedelta, _duration_pb2.Duration, _Mapping]] = ..., timezone: _Optional[str] = ..., summary: _Optional[_Union[ActivitySummary, _Mapping]] = ..., sources: _Optional[_Iterable[_Union[ActivitySource, _Mapping]]] = ..., primary_stream_source_id: _Optional[str] = ..., merge_provenance: _Optional[_Mapping[str, str]] = ..., merged_at: _Optional[_Union[datetime.datetime, _timestamp_pb2.Timestamp, _Mapping]] = ..., created_at: _Optional[_Union[datetime.datetime, _timestamp_pb2.Timestamp, _Mapping]] = ..., updated_at: _Optional[_Union[datetime.datetime, _timestamp_pb2.Timestamp, _Mapping]] = ..., tags: _Optional[_Iterable[str]] = ..., gear_id: _Optional[str] = ..., privacy: _Optional[_Union[Privacy, str]] = ..., deleted_at: _Optional[_Union[datetime.datetime, _timestamp_pb2.Timestamp, _Mapping]] = ..., start_place: _Optional[str] = ..., start_lat: _Optional[float] = ..., start_lng: _Optional[float] = ...) -> None: ...
+    gear_set_by: GearSetBy
+    gear_name: str
+    def __init__(self, id: _Optional[str] = ..., user_id: _Optional[str] = ..., type: _Optional[_Union[ActivityType, str]] = ..., discipline: _Optional[_Union[Discipline, str]] = ..., is_virtual: _Optional[bool] = ..., is_ebike: _Optional[bool] = ..., is_commute: _Optional[bool] = ..., is_race: _Optional[bool] = ..., custom_subtype: _Optional[str] = ..., title: _Optional[str] = ..., description: _Optional[str] = ..., start_time: _Optional[_Union[datetime.datetime, _timestamp_pb2.Timestamp, _Mapping]] = ..., end_time: _Optional[_Union[datetime.datetime, _timestamp_pb2.Timestamp, _Mapping]] = ..., elapsed_duration: _Optional[_Union[datetime.timedelta, _duration_pb2.Duration, _Mapping]] = ..., moving_duration: _Optional[_Union[datetime.timedelta, _duration_pb2.Duration, _Mapping]] = ..., timezone: _Optional[str] = ..., summary: _Optional[_Union[ActivitySummary, _Mapping]] = ..., sources: _Optional[_Iterable[_Union[ActivitySource, _Mapping]]] = ..., primary_stream_source_id: _Optional[str] = ..., merge_provenance: _Optional[_Mapping[str, str]] = ..., merged_at: _Optional[_Union[datetime.datetime, _timestamp_pb2.Timestamp, _Mapping]] = ..., created_at: _Optional[_Union[datetime.datetime, _timestamp_pb2.Timestamp, _Mapping]] = ..., updated_at: _Optional[_Union[datetime.datetime, _timestamp_pb2.Timestamp, _Mapping]] = ..., tags: _Optional[_Iterable[str]] = ..., gear_id: _Optional[str] = ..., privacy: _Optional[_Union[Privacy, str]] = ..., deleted_at: _Optional[_Union[datetime.datetime, _timestamp_pb2.Timestamp, _Mapping]] = ..., start_place: _Optional[str] = ..., start_lat: _Optional[float] = ..., start_lng: _Optional[float] = ..., gear_set_by: _Optional[_Union[GearSetBy, str]] = ..., gear_name: _Optional[str] = ...) -> None: ...
 
 class ActivitySummary(_message.Message):
     __slots__ = ("distance_m", "elevation_gain_m", "elevation_loss_m", "min_elevation_m", "max_elevation_m", "avg_speed_mps", "max_speed_mps", "avg_heart_rate_bpm", "max_heart_rate_bpm", "avg_power_w", "max_power_w", "normalized_power_w", "avg_cadence", "max_cadence", "avg_temperature_c", "min_temperature_c", "max_temperature_c", "calories_kcal", "tss", "intensity_factor", "pool_length_m", "total_strokes")
@@ -404,7 +417,7 @@ class ActivitySource(_message.Message):
     def __init__(self, id: _Optional[str] = ..., activity_id: _Optional[str] = ..., provider: _Optional[str] = ..., external_account_id: _Optional[str] = ..., external_id: _Optional[str] = ..., source_worker_name: _Optional[str] = ..., source_worker_version: _Optional[str] = ..., source_worker_package: _Optional[str] = ..., raw_blob_id: _Optional[str] = ..., raw_content_type: _Optional[str] = ..., raw_size_bytes: _Optional[int] = ..., parsed: _Optional[_Union[ActivitySourcePayload, _Mapping]] = ..., status: _Optional[_Union[ActivitySourceStatus, str]] = ..., status_reason: _Optional[str] = ..., reimport_status: _Optional[_Union[ReimportStatus, str]] = ..., reimport_status_reason: _Optional[str] = ..., imported_at: _Optional[_Union[datetime.datetime, _timestamp_pb2.Timestamp, _Mapping]] = ..., last_reimported_at: _Optional[_Union[datetime.datetime, _timestamp_pb2.Timestamp, _Mapping]] = ..., updated_at: _Optional[_Union[datetime.datetime, _timestamp_pb2.Timestamp, _Mapping]] = ...) -> None: ...
 
 class ActivitySourcePayload(_message.Message):
-    __slots__ = ("type", "discipline", "is_virtual", "is_ebike", "provider_native_type", "is_commute", "is_race", "custom_subtype", "title", "description", "start_time", "end_time", "elapsed_duration", "moving_duration", "timezone", "summary", "laps", "stream_summary", "provider_segment_efforts", "provider_best_efforts", "extra")
+    __slots__ = ("type", "discipline", "is_virtual", "is_ebike", "provider_native_type", "is_commute", "is_race", "custom_subtype", "title", "description", "start_time", "end_time", "elapsed_duration", "moving_duration", "timezone", "summary", "laps", "stream_summary", "provider_segment_efforts", "provider_best_efforts", "extra", "gear_external_id", "gear_name")
     class ExtraEntry(_message.Message):
         __slots__ = ("key", "value")
         KEY_FIELD_NUMBER: _ClassVar[int]
@@ -433,6 +446,8 @@ class ActivitySourcePayload(_message.Message):
     PROVIDER_SEGMENT_EFFORTS_FIELD_NUMBER: _ClassVar[int]
     PROVIDER_BEST_EFFORTS_FIELD_NUMBER: _ClassVar[int]
     EXTRA_FIELD_NUMBER: _ClassVar[int]
+    GEAR_EXTERNAL_ID_FIELD_NUMBER: _ClassVar[int]
+    GEAR_NAME_FIELD_NUMBER: _ClassVar[int]
     type: ActivityType
     discipline: Discipline
     is_virtual: bool
@@ -454,7 +469,9 @@ class ActivitySourcePayload(_message.Message):
     provider_segment_efforts: _containers.RepeatedCompositeFieldContainer[ProviderSegmentEffort]
     provider_best_efforts: _containers.RepeatedCompositeFieldContainer[ProviderBestEffort]
     extra: _containers.ScalarMap[str, str]
-    def __init__(self, type: _Optional[_Union[ActivityType, str]] = ..., discipline: _Optional[_Union[Discipline, str]] = ..., is_virtual: _Optional[bool] = ..., is_ebike: _Optional[bool] = ..., provider_native_type: _Optional[str] = ..., is_commute: _Optional[bool] = ..., is_race: _Optional[bool] = ..., custom_subtype: _Optional[str] = ..., title: _Optional[str] = ..., description: _Optional[str] = ..., start_time: _Optional[_Union[datetime.datetime, _timestamp_pb2.Timestamp, _Mapping]] = ..., end_time: _Optional[_Union[datetime.datetime, _timestamp_pb2.Timestamp, _Mapping]] = ..., elapsed_duration: _Optional[_Union[datetime.timedelta, _duration_pb2.Duration, _Mapping]] = ..., moving_duration: _Optional[_Union[datetime.timedelta, _duration_pb2.Duration, _Mapping]] = ..., timezone: _Optional[str] = ..., summary: _Optional[_Union[ActivitySummary, _Mapping]] = ..., laps: _Optional[_Iterable[_Union[ActivityLap, _Mapping]]] = ..., stream_summary: _Optional[_Union[StreamSummary, _Mapping]] = ..., provider_segment_efforts: _Optional[_Iterable[_Union[ProviderSegmentEffort, _Mapping]]] = ..., provider_best_efforts: _Optional[_Iterable[_Union[ProviderBestEffort, _Mapping]]] = ..., extra: _Optional[_Mapping[str, str]] = ...) -> None: ...
+    gear_external_id: str
+    gear_name: str
+    def __init__(self, type: _Optional[_Union[ActivityType, str]] = ..., discipline: _Optional[_Union[Discipline, str]] = ..., is_virtual: _Optional[bool] = ..., is_ebike: _Optional[bool] = ..., provider_native_type: _Optional[str] = ..., is_commute: _Optional[bool] = ..., is_race: _Optional[bool] = ..., custom_subtype: _Optional[str] = ..., title: _Optional[str] = ..., description: _Optional[str] = ..., start_time: _Optional[_Union[datetime.datetime, _timestamp_pb2.Timestamp, _Mapping]] = ..., end_time: _Optional[_Union[datetime.datetime, _timestamp_pb2.Timestamp, _Mapping]] = ..., elapsed_duration: _Optional[_Union[datetime.timedelta, _duration_pb2.Duration, _Mapping]] = ..., moving_duration: _Optional[_Union[datetime.timedelta, _duration_pb2.Duration, _Mapping]] = ..., timezone: _Optional[str] = ..., summary: _Optional[_Union[ActivitySummary, _Mapping]] = ..., laps: _Optional[_Iterable[_Union[ActivityLap, _Mapping]]] = ..., stream_summary: _Optional[_Union[StreamSummary, _Mapping]] = ..., provider_segment_efforts: _Optional[_Iterable[_Union[ProviderSegmentEffort, _Mapping]]] = ..., provider_best_efforts: _Optional[_Iterable[_Union[ProviderBestEffort, _Mapping]]] = ..., extra: _Optional[_Mapping[str, str]] = ..., gear_external_id: _Optional[str] = ..., gear_name: _Optional[str] = ...) -> None: ...
 
 class ActivityLap(_message.Message):
     __slots__ = ("index", "start_time", "elapsed_duration", "moving_duration", "distance_m", "avg_heart_rate_bpm", "max_heart_rate_bpm", "avg_power_w", "max_power_w", "avg_speed_mps", "avg_cadence", "elevation_gain_m", "label")
@@ -687,7 +704,7 @@ class GetActivityResponse(_message.Message):
     def __init__(self, activity: _Optional[_Union[Activity, _Mapping]] = ...) -> None: ...
 
 class UpdateActivityRequest(_message.Message):
-    __slots__ = ("id", "field_mask", "title", "description", "type", "discipline", "is_virtual", "is_commute", "is_race", "is_ebike", "custom_subtype", "tags", "privacy", "primary_stream_source_id", "distance_m", "elevation_gain_m", "moving_duration_s")
+    __slots__ = ("id", "field_mask", "title", "description", "type", "discipline", "is_virtual", "is_commute", "is_race", "is_ebike", "custom_subtype", "tags", "privacy", "primary_stream_source_id", "distance_m", "elevation_gain_m", "moving_duration_s", "gear_id")
     ID_FIELD_NUMBER: _ClassVar[int]
     FIELD_MASK_FIELD_NUMBER: _ClassVar[int]
     TITLE_FIELD_NUMBER: _ClassVar[int]
@@ -705,6 +722,7 @@ class UpdateActivityRequest(_message.Message):
     DISTANCE_M_FIELD_NUMBER: _ClassVar[int]
     ELEVATION_GAIN_M_FIELD_NUMBER: _ClassVar[int]
     MOVING_DURATION_S_FIELD_NUMBER: _ClassVar[int]
+    GEAR_ID_FIELD_NUMBER: _ClassVar[int]
     id: str
     field_mask: _containers.RepeatedScalarFieldContainer[str]
     title: str
@@ -722,7 +740,8 @@ class UpdateActivityRequest(_message.Message):
     distance_m: float
     elevation_gain_m: float
     moving_duration_s: int
-    def __init__(self, id: _Optional[str] = ..., field_mask: _Optional[_Iterable[str]] = ..., title: _Optional[str] = ..., description: _Optional[str] = ..., type: _Optional[_Union[ActivityType, str]] = ..., discipline: _Optional[_Union[Discipline, str]] = ..., is_virtual: _Optional[bool] = ..., is_commute: _Optional[bool] = ..., is_race: _Optional[bool] = ..., is_ebike: _Optional[bool] = ..., custom_subtype: _Optional[str] = ..., tags: _Optional[_Iterable[str]] = ..., privacy: _Optional[_Union[Privacy, str]] = ..., primary_stream_source_id: _Optional[str] = ..., distance_m: _Optional[float] = ..., elevation_gain_m: _Optional[float] = ..., moving_duration_s: _Optional[int] = ...) -> None: ...
+    gear_id: str
+    def __init__(self, id: _Optional[str] = ..., field_mask: _Optional[_Iterable[str]] = ..., title: _Optional[str] = ..., description: _Optional[str] = ..., type: _Optional[_Union[ActivityType, str]] = ..., discipline: _Optional[_Union[Discipline, str]] = ..., is_virtual: _Optional[bool] = ..., is_commute: _Optional[bool] = ..., is_race: _Optional[bool] = ..., is_ebike: _Optional[bool] = ..., custom_subtype: _Optional[str] = ..., tags: _Optional[_Iterable[str]] = ..., privacy: _Optional[_Union[Privacy, str]] = ..., primary_stream_source_id: _Optional[str] = ..., distance_m: _Optional[float] = ..., elevation_gain_m: _Optional[float] = ..., moving_duration_s: _Optional[int] = ..., gear_id: _Optional[str] = ...) -> None: ...
 
 class UpdateActivityResponse(_message.Message):
     __slots__ = ("activity",)

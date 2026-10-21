@@ -69,6 +69,7 @@ All settings are read from the environment in `cairn_garmin/config.py`.
 | `CAIRN_PULL_BATCH` | `4` | Jobs fetched per pull. |
 | `CAIRN_GARMIN_EMAIL` / `CAIRN_GARMIN_PASSWORD` | empty | Dev fallback credentials, used only when a job carries no account. |
 | `CAIRN_GARTH_HOME` | `~/.cache/cairn-garth` (`/data/garth` in the image) | Garth token store root; one subdirectory per account. |
+| `CAIRN_GARMIN_FETCH_ACTIVITY_GEAR` | `true` | Look up the gear recorded on each fetched activity (one extra call per activity). |
 | `CAIRN_PROTO_PATH` | `./proto` | Location of the generated proto stubs. |
 
 Provider name (`garmin`), package and worker version are baked into
@@ -115,13 +116,20 @@ Handlers in `cairn_garmin/runtime.py`:
   Trigger from the Connections UI ("Import health").
 - `parse_blob`: re-maps an archived raw response with the current mapping
   logic, without calling Garmin.
+- `import_gear`: the account's gear list (bikes, shoes), retired included,
+  with Garmin's per-activity-type defaults, as `ImportedGear` events. Triggered
+  on connect, from the Connections UI ("Sync gear") and with every reconcile.
+  `fetch_source` also records the gear used on each activity (one extra
+  Garmin call; `CAIRN_GARMIN_FETCH_ACTIVITY_GEAR=false` switches it off).
+  Archived responses carry no gear, so already imported activities need a
+  reimport, not a reparse, to get it.
 
 Event-carrying results are claim-checked through the blob store; jobs that keep
 failing are terminated after five deliveries with a failure envelope carrying
 the real error.
 
 Per-user credentials are delivered via `cairn.creds.garmin.get`. The capability
-manifest advertises Activity, HRV, Sleep, Weight, Steps and RestingHR.
+manifest advertises Activity, HRV, Sleep, Weight, Steps, RestingHR and Gear.
 
 Field mapping (activity and health) is verified against a small set of live
 activities; see `cairn_garmin/mapping.py` for observed quirks such as

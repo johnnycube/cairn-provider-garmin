@@ -7,8 +7,6 @@ from typing import Protocol
 
 from connectrpc.client import ConnectClient, ConnectClientSync
 from connectrpc.code import Code
-from connectrpc.codec import Codec
-from connectrpc.compression import Compression
 from connectrpc.errors import ConnectError
 from connectrpc.interceptor import Interceptor, InterceptorSync
 from connectrpc.method import IdempotencyLevel, MethodInfo
@@ -53,7 +51,7 @@ class SegmentService(Protocol):
 
 
 class SegmentServiceASGIApplication(ConnectASGIApplication[SegmentService]):
-    def __init__(self, service: SegmentService | AsyncGenerator[SegmentService], *, interceptors: Iterable[Interceptor]=(), read_max_bytes: int | None = None, compressions: Iterable[Compression] | None = None, codecs: Iterable[Codec] | None = None) -> None:
+    def __init__(self, service: SegmentService | AsyncGenerator[SegmentService], *, interceptors: Iterable[Interceptor]=(), read_max_bytes: int | None = None) -> None:
         super().__init__(
             service=service,
             endpoints=lambda svc: {
@@ -170,8 +168,6 @@ class SegmentServiceASGIApplication(ConnectASGIApplication[SegmentService]):
             },
             interceptors=interceptors,
             read_max_bytes=read_max_bytes,
-            compressions=compressions,
-            codecs=codecs,
         )
 
     @property
@@ -402,9 +398,6 @@ class SegmentServiceClient(ConnectClient):
         )
 
 
-
-
-
 class SegmentServiceSync(Protocol):
     def list_segments(self, request: cairn_dot_v1_dot_segment__pb2.ListSegmentsRequest, ctx: RequestContext) -> cairn_dot_v1_dot_segment__pb2.ListSegmentsResponse:
         raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
@@ -431,7 +424,7 @@ class SegmentServiceSync(Protocol):
 
 
 class SegmentServiceWSGIApplication(ConnectWSGIApplication):
-    def __init__(self, service: SegmentServiceSync, interceptors: Iterable[InterceptorSync]=(), read_max_bytes: int | None = None, compressions: Iterable[Compression] | None = None, codecs: Iterable[Codec] | None = None) -> None:
+    def __init__(self, service: SegmentServiceSync, interceptors: Iterable[InterceptorSync]=(), read_max_bytes: int | None = None) -> None:
         super().__init__(
             endpoints={
                 "/cairn.v1.SegmentService/ListSegments": EndpointSync.unary(
@@ -547,8 +540,6 @@ class SegmentServiceWSGIApplication(ConnectWSGIApplication):
             },
             interceptors=interceptors,
             read_max_bytes=read_max_bytes,
-            compressions=compressions,
-            codecs=codecs,
         )
 
     @property
@@ -777,5 +768,3 @@ class SegmentServiceClientSync(ConnectClientSync):
             headers=headers,
             timeout_ms=timeout_ms,
         )
-
-

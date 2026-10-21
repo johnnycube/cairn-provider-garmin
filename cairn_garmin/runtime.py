@@ -87,14 +87,16 @@ class Worker:
             asyncio.create_task(self._consume(C.SUBJ_METRICS, "metrics", self._handle_import_metrics)),
             asyncio.create_task(self._consume(C.SUBJ_PARSE_BLOB, "parseblob", self._handle_parse_blob)),
             asyncio.create_task(self._consume(C.SUBJ_RECONCILE, "reconcile", self._handle_reconcile)),
+            asyncio.create_task(self._consume(C.SUBJ_GEAR, "gear", self._handle_import_gear)),
         ]
         log.info(
-            "serving %s; pulling %s, %s, %s, %s",
+            "serving %s; pulling %s, %s, %s, %s, %s",
             DISCOVER_SUBJECT,
             C.SUBJ_FETCH,
             C.SUBJ_METRICS,
             C.SUBJ_PARSE_BLOB,
             C.SUBJ_RECONCILE,
+            C.SUBJ_GEAR,
         )
         await self._stop.wait()
         for t in tasks:
@@ -309,6 +311,11 @@ class Worker:
         imported = w.ImportedActivity(ref=ref, payload=mapping.activity_payload(act))
         if stream is not None:
             imported.stream.CopyFrom(stream)
+        # Gear is optional data: one extra call, never fails the import. The
+        # GEAR events precede the activity that references them.
+        gear = await self._activity_gear(client, str(ext_id))
+        mapping.apply_activity_gear(imported.payload, gear)
+        events = [mapping.gear_event(user_id, account_id, rec) for rec in gear if rec.get("uuid")]
 
         # Archive the raw response (best-effort) so it's viewable + re-parseable.
         blob_id, blob_size = await archive.archive(self._nats, user_id, str(ext_id), act, details)
@@ -317,10 +324,42 @@ class Worker:
             imported.raw_content_type = "application/json"
             imported.raw_size_bytes = blob_size
 
-        event = w.WorkerEvent(type=w.WORKER_EVENT_TYPE_ACTIVITY, activity=imported)
-        jr = mapping.job_result([event], name=C.WORKER_NAME, version=C.VERSION, package=C.PACKAGE)
+        events.append(w.WorkerEvent(type=w.WORKER_EVENT_TYPE_ACTIVITY, activity=imported))
+        jr = mapping.job_result(events, name=C.WORKER_NAME, version=C.VERSION, package=C.PACKAGE)
         await self._publish_result(C.RESULT_SUBJECT, jr)
         log.info("published activity %s for user %s", ext_id, job.get("user_id"))
+
+    async def _activity_gear(self, client: GarminClient, ext_id: str) -> list[dict[str, Any]]:
+        if not self.cfg.fetch_activity_gear:
+            return []
+        try:
+            return await asyncio.to_thread(client.activity_gear, ext_id)
+        except Exception as e:  # noqa: BLE001 — gear is optional
+            log.warning("activity gear lookup failed for %s: %s", ext_id, e)
+            return []
+
+    async def _handle_import_gear(self, body: bytes) -> None:
+        job = json.loads(body)
+        account_id = job.get("account_id", "")
+        user_id = job.get("user_id", "")
+        client = await self._client_for(account_id)
+        gear = await asyncio.to_thread(client.gear)
+        try:
+            defaults = mapping.gear_default_types(await asyncio.to_thread(client.gear_defaults))
+        except Exception as e:  # noqa: BLE001 — defaults are a nicety
+            log.warning("gear defaults lookup failed: %s", e)
+            defaults = {}
+        events = [
+            mapping.gear_event(user_id, account_id, rec, defaults.get(str(rec.get("uuid")), []))
+            for rec in gear
+            if rec.get("uuid")
+        ]
+        if not events:
+            log.info("no gear on account %s", account_id)
+            return
+        jr = mapping.job_result(events, name=C.WORKER_NAME, version=C.VERSION, package=C.PACKAGE)
+        await self._publish_result(C.RESULT_GEAR, jr)
+        log.info("published %d gear for user %s", len(events), user_id)
 
     async def _handle_parse_blob(self, body: bytes) -> None:
         """Re-parse an archived activity with current mapping logic — no Garmin
